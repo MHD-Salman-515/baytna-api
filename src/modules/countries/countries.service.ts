@@ -43,6 +43,16 @@ export class CountriesService {
     return country;
   }
 
+  /** Public-facing lookup: only active, non-deleted countries — used to validate phone numbers at signup. */
+  async findActiveById(id: string): Promise<Country> {
+    this.assertValidId(id);
+    const country = await this.countryModel.findOne({ _id: id, isActive: true, isDeleted: false }).exec();
+    if (!country) {
+      throw new NotFoundException(`Country ${id} not found or not active`);
+    }
+    return country;
+  }
+
   async create(dto: CreateCountryDto): Promise<Country> {
     const existing = await this.countryModel
       .findOne({ code: dto.code.toUpperCase(), isDeleted: false })

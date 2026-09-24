@@ -8,7 +8,11 @@ export interface AppConfig {
     ttl: number;
     limit: number;
   };
-  adminApiKey: string;
+  jwtAccessSecret: string;
+  jwtRefreshSecret: string;
+  otpPepper: string;
+  redisUrl?: string;
+  seedAdminPhone?: string;
 }
 
 export default (): AppConfig => ({
@@ -21,5 +25,9 @@ export default (): AppConfig => ({
     ttl: parseInt(process.env.THROTTLE_TTL ?? '60', 10),
     limit: parseInt(process.env.THROTTLE_LIMIT ?? '100', 10),
   },
-  adminApiKey: process.env.ADMIN_API_KEY as string,
+  jwtAccessSecret: process.env.JWT_ACCESS_SECRET as string,
+  jwtRefreshSecret: process.env.JWT_REFRESH_SECRET as string,
+  otpPepper: process.env.OTP_PEPPER as string,
+  redisUrl: process.env.REDIS_URL,
+  seedAdminPhone: process.env.SEED_ADMIN_PHONE,
 });
