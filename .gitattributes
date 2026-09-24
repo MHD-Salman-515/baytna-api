@@ -1,0 +1,4 @@
+# Normalize all text files to LF in the repo and on checkout, regardless of
+# the platform (this is a Windows dev machine) or each contributor's core.autocrlf
+# setting — avoids whole-file diffs from line-ending churn.
+* text=auto eol=lf

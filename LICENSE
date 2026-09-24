@@ -1,0 +1,13 @@
+All Rights Reserved
+
+Copyright (c) 2026, [YOUR NAME OR COMPANY NAME HERE].
+
+This is proprietary and confidential software. No part of this repository — source
+code, documentation, or assets — may be copied, modified, distributed, sublicensed,
+or used in any form, in whole or in part, without the prior written permission of
+the copyright holder.
+
+This project is UNLICENSED for public/open-source use (see "license": "UNLICENSED"
+in package.json, which matches npm's convention for signaling that the package is
+not licensed for reuse). It is intended solely for internal/commercial use by its
+owner and authorized contributors under a separate agreement.
