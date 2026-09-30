@@ -10,6 +10,8 @@ import { redactMongoUrisInText } from '../../config/redact-connection-string';
 import { AppModule } from '../../app.module';
 import { City, CityDocument } from '../../modules/cities/schemas/city.schema';
 import { Country, CountryDocument } from '../../modules/countries/schemas/country.schema';
+import { PhoneValidationService } from '../../modules/users/phone-validation.service';
+import { UsersService } from '../../modules/users/users.service';
 import { citiesSeedData } from './cities.seed-data';
 import { countriesSeedData } from './countries.seed-data';
 import { assertLocalMongoUri } from './seed-guard';
@@ -89,6 +91,20 @@ async function bootstrap(): Promise<void> {
 
     summarize('Countries', countryOutcomes);
     summarize('Cities', cityOutcomes);
+
+    const seedAdminPhone = process.env.SEED_ADMIN_PHONE;
+    if (!seedAdminPhone) {
+      logger.warn(
+        'SEED_ADMIN_PHONE not set — skipping admin user seeding (no ADMIN account will exist)',
+      );
+    } else {
+      const phoneValidationService = app.get(PhoneValidationService);
+      const usersService = app.get(UsersService);
+      const { e164, country } = await phoneValidationService.resolveCountryForE164(seedAdminPhone);
+      const { outcome } = await usersService.upsertAdmin(e164, country.id as string);
+      logger.log(`Admin user ${e164} (${country.code}): ${outcome}`);
+    }
+
     logger.log('Seeding complete');
   } finally {
     await app.close();

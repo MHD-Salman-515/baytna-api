@@ -14,7 +14,9 @@ export class RedisOtpStore implements OtpStore, OnModuleDestroy {
 
   constructor(redisUrl: string) {
     this.client = new Redis(redisUrl, { lazyConnect: false });
-    this.client.on('error', (error) => this.logger.error(`Redis connection error: ${error.message}`));
+    this.client.on('error', (error) =>
+      this.logger.error(`Redis connection error: ${error.message}`),
+    );
   }
 
   async onModuleDestroy(): Promise<void> {

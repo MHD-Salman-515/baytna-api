@@ -113,7 +113,12 @@ describe('UsersService', () => {
     });
 
     it('promotes an existing non-admin user by adding the ADMIN role', async () => {
-      const existing = { _id: validId, phone, roles: [Role.CUSTOMER], save: jest.fn().mockResolvedValue(undefined) };
+      const existing = {
+        _id: validId,
+        phone,
+        roles: [Role.CUSTOMER],
+        save: jest.fn().mockResolvedValue(undefined),
+      };
       model.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(existing) });
 
       const result = await service.upsertAdmin(phone, countryId);

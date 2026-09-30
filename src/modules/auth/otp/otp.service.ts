@@ -26,12 +26,21 @@ export class OtpService {
   async requestOtp(e164Phone: string): Promise<void> {
     const existing = await this.store.get(e164Phone);
     if (existing && Date.now() - existing.requestedAt < OTP_COOLDOWN_MS) {
-      throw new HttpException('Please wait before requesting another code', HttpStatus.TOO_MANY_REQUESTS);
+      throw new HttpException(
+        'Please wait before requesting another code',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
     }
 
-    const requestCount = await this.store.recordRequestAndCountInWindow(e164Phone, OTP_REQUEST_WINDOW_MS);
+    const requestCount = await this.store.recordRequestAndCountInWindow(
+      e164Phone,
+      OTP_REQUEST_WINDOW_MS,
+    );
     if (requestCount > OTP_MAX_REQUESTS_PER_WINDOW) {
-      throw new HttpException('Too many code requests — try again later', HttpStatus.TOO_MANY_REQUESTS);
+      throw new HttpException(
+        'Too many code requests — try again later',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
     }
 
     const code = this.generateCode();

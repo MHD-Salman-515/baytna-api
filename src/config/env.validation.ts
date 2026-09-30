@@ -21,9 +21,13 @@ export const envValidationSchema = Joi.object({
   // Signing secrets for access/refresh JWTs. Must be different from each
   // other (a leaked access token must not double as a valid refresh token).
   JWT_ACCESS_SECRET: Joi.string().min(32).required(),
-  JWT_REFRESH_SECRET: Joi.string().min(32).required().invalid(Joi.ref('JWT_ACCESS_SECRET')).messages({
-    'any.invalid': 'JWT_REFRESH_SECRET must be different from JWT_ACCESS_SECRET',
-  }),
+  JWT_REFRESH_SECRET: Joi.string()
+    .min(32)
+    .required()
+    .invalid(Joi.ref('JWT_ACCESS_SECRET'))
+    .messages({
+      'any.invalid': 'JWT_REFRESH_SECRET must be different from JWT_ACCESS_SECRET',
+    }),
 
   // Server-side pepper mixed into the OTP code hash before storage, so a
   // leaked OTP store (in-memory dump or Redis) alone isn't enough to derive

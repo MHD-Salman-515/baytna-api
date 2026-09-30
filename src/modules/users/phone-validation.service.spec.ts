@@ -17,7 +17,10 @@ describe('PhoneValidationService', () => {
     };
 
     const module: TestingModule = await Test.createTestingModule({
-      providers: [PhoneValidationService, { provide: CountriesService, useValue: countriesService }],
+      providers: [
+        PhoneValidationService,
+        { provide: CountriesService, useValue: countriesService },
+      ],
     }).compile();
 
     service = module.get<PhoneValidationService>(PhoneValidationService);
@@ -44,20 +47,26 @@ describe('PhoneValidationService', () => {
     it('rejects an unparseable number', async () => {
       countriesService.findActiveById.mockResolvedValue(syria);
 
-      await expect(service.normalizeForCountry('not-a-phone', 'sy-id')).rejects.toThrow(BadRequestException);
+      await expect(service.normalizeForCountry('not-a-phone', 'sy-id')).rejects.toThrow(
+        BadRequestException,
+      );
     });
 
     it('rejects a number that resolves to a different country than requested', async () => {
       countriesService.findActiveById.mockResolvedValue(syria);
 
       // Fully-qualified Iraqi number submitted while claiming countryId=Syria.
-      await expect(service.normalizeForCountry('+964711111111', 'sy-id')).rejects.toThrow(BadRequestException);
+      await expect(service.normalizeForCountry('+964711111111', 'sy-id')).rejects.toThrow(
+        BadRequestException,
+      );
     });
 
     it('propagates NotFoundException for an inactive/unknown country', async () => {
       countriesService.findActiveById.mockRejectedValue(new NotFoundException());
 
-      await expect(service.normalizeForCountry('0911111111', 'missing-id')).rejects.toThrow(NotFoundException);
+      await expect(service.normalizeForCountry('0911111111', 'missing-id')).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 
@@ -74,7 +83,9 @@ describe('PhoneValidationService', () => {
     it('rejects when no active country matches the phone', async () => {
       countriesService.findActive.mockResolvedValue([iraq]);
 
-      await expect(service.resolveCountryForE164('+963911111111')).rejects.toThrow(BadRequestException);
+      await expect(service.resolveCountryForE164('+963911111111')).rejects.toThrow(
+        BadRequestException,
+      );
     });
 
     it('rejects an invalid E.164 string', async () => {

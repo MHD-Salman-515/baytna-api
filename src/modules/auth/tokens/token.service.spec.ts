@@ -98,23 +98,50 @@ describe('TokenService', () => {
       );
     });
 
+    it('rejects an already-REVOKED token (e.g. post-logout) without escalating to a family-wide revoke', async () => {
+      jwtService.verifyAsync.mockResolvedValue({ sub: userId, familyId, jti });
+      model.findOne.mockReturnValue({
+        exec: jest.fn().mockResolvedValue({ familyId, status: RefreshTokenStatus.REVOKED, userId }),
+      });
+
+      await expect(service.rotateRefreshToken('token')).rejects.toThrow(UnauthorizedException);
+
+      expect(model.updateMany).not.toHaveBeenCalled();
+    });
+
     it('rejects when the owning user is not ACTIVE', async () => {
       jwtService.verifyAsync.mockResolvedValue({ sub: userId, familyId, jti });
       model.findOne.mockReturnValue({
-        exec: jest
-          .fn()
-          .mockResolvedValue({ familyId, status: RefreshTokenStatus.ACTIVE, userId, save: jest.fn() }),
+        exec: jest.fn().mockResolvedValue({
+          familyId,
+          status: RefreshTokenStatus.ACTIVE,
+          userId,
+          save: jest.fn(),
+        }),
       });
-      usersService.findById.mockResolvedValue({ id: userId, roles: [Role.CUSTOMER], status: UserStatus.SUSPENDED });
+      usersService.findById.mockResolvedValue({
+        id: userId,
+        roles: [Role.CUSTOMER],
+        status: UserStatus.SUSPENDED,
+      });
 
       await expect(service.rotateRefreshToken('token')).rejects.toThrow(UnauthorizedException);
     });
 
     it('rotates a valid ACTIVE token: marks it ROTATED and issues a new pair in the same family', async () => {
-      const record = { familyId, status: RefreshTokenStatus.ACTIVE, userId, save: jest.fn().mockResolvedValue(undefined) };
+      const record = {
+        familyId,
+        status: RefreshTokenStatus.ACTIVE,
+        userId,
+        save: jest.fn().mockResolvedValue(undefined),
+      };
       jwtService.verifyAsync.mockResolvedValue({ sub: userId, familyId, jti });
       model.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(record) });
-      usersService.findById.mockResolvedValue({ id: userId, roles: [Role.CUSTOMER], status: UserStatus.ACTIVE });
+      usersService.findById.mockResolvedValue({
+        id: userId,
+        roles: [Role.CUSTOMER],
+        status: UserStatus.ACTIVE,
+      });
 
       const result = await service.rotateRefreshToken('token');
 

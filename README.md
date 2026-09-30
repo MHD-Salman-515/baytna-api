@@ -6,8 +6,9 @@ booking goes through trip-like stages and the worker swipes to finish it. Multi-
 from day one: nothing about currency, phone prefixes, or locale is hardcoded — it all comes from
 the `countries` collection, and every user/worker/booking references a `countryId`/`cityId`.
 
-**Phase 1** (this codebase): global app setup, `countries` and `cities` reference data. Everything
-else (`auth`, `users`, `workers`, `bookings`, ...) is scaffolded as empty module folders for later
+**Phases 1–2** (this codebase): global app setup, `countries`/`cities` reference data, and phone-OTP
+authentication (no passwords — sign up and log in with a phone number and a one-time code).
+Everything else (`workers`, `bookings`, ...) is scaffolded as empty module folders for later
 phases — see "Roadmap" below.
 
 ## Tech stack
@@ -17,7 +18,9 @@ phases — see "Roadmap" below.
 - **Config**: `@nestjs/config` with Joi env validation — fails fast on missing/invalid env vars
 - **Validation**: class-validator / class-transformer, global `ValidationPipe`
   (whitelist, forbidNonWhitelisted, transform)
-- **Docs**: Swagger at `/docs`
+- **Auth**: Phone OTP (no passwords) — `@nestjs/jwt` access/refresh tokens, `libphonenumber-js`
+  for E.164 normalization, OTP state in-memory (dev) or Redis (`REDIS_URL`)
+- **Docs**: Swagger at `/docs` (bearer-auth aware — see "Authentication")
 - **Local infra**: Docker Compose for MongoDB/Redis (optional — see "MongoDB options")
 - **Quality**: ESLint + Prettier, Jest (unit tests mock Mongoose models — no live DB needed to test)
 
@@ -41,7 +44,11 @@ cp .env.example .env
 Now edit `.env`:
 
 - `MONGODB_URI` — see "MongoDB options" below for the three ways to get one
-- `ADMIN_API_KEY` — a long random string, e.g. `openssl rand -hex 32`
+- `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` — two *different* long random strings, e.g.
+  `openssl rand -hex 32` (run it twice)
+- `OTP_PEPPER` — another long random string, e.g. `openssl rand -hex 32`
+- `SEED_ADMIN_PHONE` — optional, but you'll want it: a full E.164 number (e.g.
+  `+963911111111`) for the seeder to create as your first ADMIN user
 
 Then:
 
@@ -70,6 +77,96 @@ Quick reference — details for each are in the sections below.
 | `npm run test:cov` | Unit tests with coverage |
 | `npm run lint` | ESLint (auto-fix) |
 | `npm run build` | Production build (`dist/`) |
+
+## Authentication (Phase 2)
+
+Phone + one-time code, no passwords. A person can hold both `CUSTOMER` and `WORKER` roles at
+once (an array, not a single field) — `ADMIN` is granted only via the seeder or an existing admin.
+
+### Endpoints
+
+| Method | Path | Auth | Notes |
+|---|---|---|---|
+| POST | `/api/v1/auth/otp/request` | public | `{ countryId, phone }` → sends a 6-digit code. Response never reveals whether the phone is already registered. |
+| POST | `/api/v1/auth/otp/verify` | public | `{ countryId, phone, code }` → `{ accessToken, refreshToken, isNewUser, user }` |
+| POST | `/api/v1/auth/refresh` | public* | `{ refreshToken }` → a new pair (old refresh token is invalidated — see "Token rotation") |
+| POST | `/api/v1/auth/logout` | public* | `{ refreshToken }` → revokes that one session (204) |
+| POST | `/api/v1/auth/logout-all` | Bearer | revokes every session for the caller (204) |
+| GET | `/api/v1/auth/me` | Bearer | returns the current user |
+
+\* "public" meaning: not gated by the access-token guard. `refresh` and `logout` prove ownership
+via the refresh token itself (verified inside `AuthService`), not a bearer access token — so
+logging out still works even if your 15-minute access token already expired.
+
+### Reading the OTP code in dev
+
+There's no real SMS/WhatsApp sending yet (deferred on purpose — see `OtpSender` below). In
+development, `POST /auth/otp/request` logs the code to the **server console** instead:
+
+```
+[ConsoleOtpSender (DEV ONLY)] OTP code for +963911111111: 482913 (development mode — not actually sent)
+```
+
+Watch the terminal running `npm run start:dev` and copy the 6 digits into your `verify` call.
+`ConsoleOtpSender` **refuses to start** (throws at boot) if `NODE_ENV=production` — there is
+deliberately no way to accidentally ship "log the code to stdout" as your production OTP delivery.
+A real `SmsSender`/`WhatsAppSender` implementing the same `OtpSender` interface is future work.
+
+### Rate limiting and code lifecycle
+
+- Code: 6 digits, `crypto.randomInt` (not `Math.random`), sha256-hashed with a server-side pepper
+  (`OTP_PEPPER`) before storage — the plaintext code is never stored, and only ever logged by
+  `ConsoleOtpSender` in dev.
+- TTL: 5 minutes. Single-use: verifying (success or exhausting attempts) deletes the record.
+- Cooldown: 60 seconds between requests for the same phone (429 otherwise).
+- Max 5 requests per phone per hour, **plus** a separate per-IP throttle on the route itself
+  (`@Throttle`, layered on top of the global throttler).
+- Max 5 wrong verify attempts per code, then it's invalidated outright (must request a new one) —
+  constant-time comparison against the stored hash either way.
+- Storage: in-memory by default (fine for one dev process); set `REDIS_URL` to use Redis instead
+  — needed as soon as you run more than one instance.
+
+### Tokens
+
+- Access: JWT, 15 minutes, payload `{ sub, roles }`, signed with `JWT_ACCESS_SECRET`.
+- Refresh: JWT, 30 days, signed with `JWT_REFRESH_SECRET` (**must differ** from the access
+  secret — the Joi schema rejects boot if they match).
+- **Rotation**: every `/auth/refresh` call invalidates the presented refresh token and issues a
+  new one in the same "family" (`familyId`, unchanged across rotations; `jti`, unique per token).
+- **Reuse detection**: if an already-rotated (or revoked) refresh token is presented again, the
+  *entire family* is revoked immediately and the attempt is logged as a warning — the only way
+  that happens is a token got used from two places at once (e.g. stolen).
+- Refresh tokens are stored hashed (sha256) in `refresh_tokens`, with a Mongo TTL index that
+  hard-deletes expired records — no soft delete here (see the comment in
+  `refresh-token.schema.ts` for why that's a deliberate deviation from the usual `BaseSchema`).
+- Suspended/deleted users (`User.status`) can't obtain new tokens (`otp/verify`) or refresh
+  existing ones (`/auth/refresh`) — checked at both points explicitly.
+
+### Guards: `@Public()` and `@Roles()`
+
+`JwtAuthGuard` and `RolesGuard` are registered globally (`APP_GUARD` in `app.module.ts`) — **every
+route requires a valid access token by default.** Opt out per-route:
+
+```ts
+@Public()                 // no token required at all
+@Get()
+findActive() { ... }
+
+@Roles(Role.ADMIN)        // token required AND must carry the ADMIN role
+@Get('admin')
+findAll() { ... }
+```
+
+This replaced the Phase 1 placeholder `AdminGuard`/`x-admin-key` header entirely — admin routes on
+`countries`/`cities` now require a real bearer token from a user with the `ADMIN` role, same URL
+paths as before.
+
+### Getting an admin
+
+Set `SEED_ADMIN_PHONE=+<full E.164 number>` in `.env` before running `npm run seed` — it
+idempotently creates that phone as an `ADMIN` user (or promotes it, if it already exists with
+other roles), inferring the country from the number itself. Log in through the same
+`otp/request` → `otp/verify` flow as anyone else; there's no separate admin login.
 
 ## MongoDB options
 
@@ -101,11 +198,12 @@ Set `MONGO_ROOT_PASSWORD` in `.env` first (see the comment above it in `.env.exa
 sure `MONGODB_URI` matches `MONGO_ROOT_USERNAME`/`MONGO_ROOT_PASSWORD`/`MONGO_PORT` exactly,
 including `?authSource=admin`. Lifecycle scripts: `db:up` / `db:down` / `db:reset` / `db:logs`.
 
-### Redis (needed starting Phase 2, not Phase 1)
+### Redis (optional — OTP state)
 
-Phase 1 doesn't use Redis. When Phase 2 (OTP) needs it: Docker (`db:up` already starts a Redis
-container) if you have it, or a managed free tier with no local install — Upstash or Redis Cloud
-both have one — pointed at via a `REDIS_URL` env var at that point.
+Not required: the OTP store defaults to in-memory, fine for a single dev/test process. Set
+`REDIS_URL` once you run more than one instance, or want OTP state to survive a restart — either
+Docker (`db:up` already starts a Redis container) or a managed free tier with no local install
+(Upstash, Redis Cloud).
 
 ### Standalone scripts and env loading
 
@@ -168,17 +266,12 @@ is ever printed. Paste it into `MONGODB_URI` in `.env` yourself and fill in the 
 
 ### Smoke test
 
-With `db:up` and `start:dev` both running, in another terminal:
-
-```bash
-export ADMIN_API_KEY=<same value as in your .env>
-npm run smoke:test
-```
-
-Runs `scripts/smoke-test.sh`: seeds twice and checks counts don't move, checks the public
-countries/cities endpoints, checks an admin route 401s without the header, soft-deletes a
-country and checks it disappears from the public list but stays visible (with `isDeleted:true`)
-in the admin view, and checks `/docs` responds. Exits non-zero on the first failure.
+**Stale as of Phase 2**: `scripts/smoke-test.sh` predates the auth migration — it still
+authenticates admin calls via the retired `x-admin-key`/`ADMIN_API_KEY`, which no longer exist.
+It needs updating to drive the OTP flow (request → read the code from the `start:dev` console →
+verify → use the returned `accessToken`) before it'll pass again. Left as-is rather than patched
+blind, since scripting "scrape a 6-digit code out of server stdout" deserves its own look rather
+than a rushed fix bundled into this phase.
 
 ## Testing
 
@@ -260,18 +353,18 @@ Errors:
 { "success": false, "error": { "statusCode": 404, "message": "...", "error": "Not Found" } }
 ```
 
-## Admin routes (Phase 1 placeholder)
+## Admin routes
 
-Admin CRUD endpoints (`/countries/admin/*`, `/cities/admin/*`) are protected by a **placeholder**
-`AdminGuard` that checks a static `x-admin-key` header against `ADMIN_API_KEY`. This is
-intentionally minimal — it will be replaced by real JWT + role-based auth in Phase 2.
+Admin CRUD endpoints (`/countries/admin/*`, `/cities/admin/*`) require a bearer access token from
+a user whose `roles` include `ADMIN` (`@Roles(Role.ADMIN)` + the global `JwtAuthGuard`/
+`RolesGuard` — see "Authentication" above). Get one via `SEED_ADMIN_PHONE` + the OTP flow.
 
-Example:
+Example (assuming `$ACCESS_TOKEN` came from `POST /auth/otp/verify`):
 
 ```bash
 curl -X POST http://localhost:3000/api/v1/countries/admin \
   -H "Content-Type: application/json" \
-  -H "x-admin-key: $ADMIN_API_KEY" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
   -d '{
     "code": "SY",
     "name": { "ar": "سوريا", "en": "Syria" },
@@ -282,22 +375,24 @@ curl -X POST http://localhost:3000/api/v1/countries/admin \
   }'
 ```
 
-## Endpoints (Phase 1)
+## Endpoints
+
+Auth endpoints are listed under "Authentication" above. Countries/cities:
 
 | Method | Path | Auth | Notes |
 |---|---|---|---|
 | GET | `/api/v1/countries` | public | active countries only |
-| GET | `/api/v1/countries/admin` | admin | paginated, includes inactive **and soft-deleted** |
-| GET | `/api/v1/countries/admin/:id` | admin | includes soft-deleted |
-| POST | `/api/v1/countries/admin` | admin | |
-| PUT | `/api/v1/countries/admin/:id` | admin | only active (non-deleted) records |
-| DELETE | `/api/v1/countries/admin/:id` | admin | soft delete |
+| GET | `/api/v1/countries/admin` | ADMIN | paginated, includes inactive **and soft-deleted** |
+| GET | `/api/v1/countries/admin/:id` | ADMIN | includes soft-deleted |
+| POST | `/api/v1/countries/admin` | ADMIN | |
+| PUT | `/api/v1/countries/admin/:id` | ADMIN | only active (non-deleted) records |
+| DELETE | `/api/v1/countries/admin/:id` | ADMIN | soft delete |
 | GET | `/api/v1/cities?countryId=...` | public | active cities in a country, paginated |
-| GET | `/api/v1/cities/admin` | admin | all cities, including soft-deleted |
-| GET | `/api/v1/cities/admin/:id` | admin | |
-| POST | `/api/v1/cities/admin` | admin | |
-| PUT | `/api/v1/cities/admin/:id` | admin | |
-| DELETE | `/api/v1/cities/admin/:id` | admin | soft delete |
+| GET | `/api/v1/cities/admin` | ADMIN | all cities, including soft-deleted |
+| GET | `/api/v1/cities/admin/:id` | ADMIN | |
+| POST | `/api/v1/cities/admin` | ADMIN | |
+| PUT | `/api/v1/cities/admin/:id` | ADMIN | |
+| DELETE | `/api/v1/cities/admin/:id` | ADMIN | soft delete |
 
 ## Project structure
 
@@ -306,12 +401,15 @@ src/
   config/        env schema (Joi) + typed config
   common/        exception filter, response interceptor, pagination DTO,
                  base schema (timestamps + soft delete), localized name schema/DTO,
-                 placeholder AdminGuard
-  database/      Mongoose root connection, idempotent seeders
+                 Role enum, @Public/@Roles/@CurrentUser decorators, JwtAuthGuard, RolesGuard
+  database/      Mongoose root connection, idempotent seeders (+ diagnostics: doctor, uri:build)
   modules/
     countries/   implemented
     cities/      implemented
-    auth/ users/ workers/ worker-documents/ services/ worker-services/
+    users/       implemented — schema, PhoneValidationService, UsersService
+    auth/        implemented — otp/ (sender + store + service), tokens/ (rotation + reuse
+                 detection), auth.controller/service
+    workers/ worker-documents/ services/ worker-services/
     bookings/ realtime/locations/ reviews/ reports/ payments/
     notifications/ admin/          empty — later phases
 ```
@@ -326,7 +424,8 @@ src/
   `isDeleted: false` explicitly; admin *read* methods (`findAll`, `findOne`) deliberately don't,
   so admins can see and audit deleted records. Admin *write* methods (`update`, `remove`) still
   only operate on non-deleted records — there's no "undelete" in Phase 1.
-- Roles: `CUSTOMER`, `WORKER`, `ADMIN` (enforced from Phase 2 onward).
+- Roles: `CUSTOMER`, `WORKER`, `ADMIN` — an array on `User.roles` (a person can hold more than
+  one), enforced by the global `JwtAuthGuard`/`RolesGuard` + `@Roles()` (see "Authentication").
 - Worker documents (national ID, criminal record certificate): private storage only, admin-only
   access — implemented in the `worker-documents` phase.
 
@@ -334,8 +433,8 @@ src/
 
 | Phase | Scope | Status |
 |---|---|---|
-| 1 | Global app setup, `countries` + `cities` reference data | **Done** (this codebase) |
-| 2 | Auth: phone OTP with WhatsApp fallback | Next — see below |
+| 1 | Global app setup, `countries` + `cities` reference data | **Done** |
+| 2 | Auth: phone OTP, JWT access/refresh with rotation | **Done** (this codebase) |
 | 3 | Worker profiles and documents (national ID, criminal record — private/admin-only storage) | Planned |
 | 4 | Service catalog and per-worker pricing (`HOURLY` / `BY_SIZE` / `FIXED`) | Planned |
 | 5 | Bookings: `INSTANT` and `SCHEDULED`, trip-like state machine | Planned |
@@ -344,27 +443,16 @@ src/
 | 8 | Reviews and safety (reports, moderation) | Planned |
 | 9 | Payments and admin dashboard | Planned |
 
-### Phase 2 in detail
+### Phase 2 — what shipped, and what didn't
 
-**Auth: phone-based OTP, with WhatsApp OTP as fallback.**
+Delivered: the full OTP + JWT flow described under "Authentication" above — `users` module
+(phone/countryId/cityId/roles-array/profile/status), hashed+peppered+single-use OTPs with
+cooldown/rate-limit/attempt-limit, access+refresh JWTs with rotation and reuse detection,
+`JwtAuthGuard`/`RolesGuard` replacing the Phase 1 placeholder `AdminGuard`, and an idempotent
+`SEED_ADMIN_PHONE` bootstrap admin.
 
-Context: SMS delivery is unreliable in Syria and Iraq, so OTP delivery needs a fallback path
-from day one rather than bolted on later.
-
-Planned shape:
-
-- `POST /auth/otp/request` — accepts `{ countryId, phoneNumber }`, validates the number against
-  the country's `phonePrefix`, generates a short-lived OTP, and attempts delivery via SMS first.
-- Delivery abstraction (`OtpSenderService` with `SmsSender` / `WhatsAppSender` implementations)
-  so the fallback is a provider swap, not an if/else scattered through the codebase. If the SMS
-  provider fails or times out, fall back to WhatsApp Business API automatically.
-- OTPs stored hashed with TTL (Redis, once the Redis client is wired up in this phase) rather
-  than plaintext in Mongo.
-- `POST /auth/otp/verify` — validates the OTP, creates or looks up the `User` (role `CUSTOMER`
-  or `WORKER` depending on the flow), and issues a JWT access/refresh token pair.
-- `AuthGuard` + `RolesGuard` replacing today's placeholder `AdminGuard`; existing admin routes
-  swap over to `@Roles('ADMIN')` with no route-shape changes.
-- Rate limiting per phone number/IP on the OTP request endpoint specifically, on top of the
-  global throttler already in place, since OTP endpoints are the most common abuse target.
-- `users` module gets its real schema (role, countryId, cityId, phone, profile) at the same time,
-  since auth can't exist without a `User` to attach to.
+Deliberately deferred (real SMS/WhatsApp delivery was out of scope for this phase — see
+`OtpSender` in `src/modules/auth/otp/otp-sender.interface.ts`): `ConsoleOtpSender` (logs the code,
+refuses to run when `NODE_ENV=production`) is the only implementation. A future `SmsSender`/
+`WhatsAppSender` — with the SMS-first, WhatsApp-fallback behavior originally envisioned for this
+phase — implements the same interface; nothing else in the OTP flow changes when they land.

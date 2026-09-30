@@ -1,11 +1,11 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { CountryCode, parsePhoneNumberFromString } from 'libphonenumber-js';
 import { CountriesService } from '../countries/countries.service';
-import { Country } from '../countries/schemas/country.schema';
+import { CountryDocument } from '../countries/schemas/country.schema';
 
 export interface NormalizedPhone {
   e164: string;
-  country: Country;
+  country: CountryDocument;
 }
 
 @Injectable()

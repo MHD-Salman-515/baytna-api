@@ -33,7 +33,10 @@ export class UsersService {
    * `phone` (code 11000) and falls back to re-fetching the winner's record,
    * rather than erroring the request out.
    */
-  async findOrCreateByPhone(phone: string, countryId: string): Promise<{ user: UserDocument; isNewUser: boolean }> {
+  async findOrCreateByPhone(
+    phone: string,
+    countryId: string,
+  ): Promise<{ user: UserDocument; isNewUser: boolean }> {
     const existing = await this.userModel.findOne({ phone, isDeleted: false }).exec();
     if (existing) {
       return { user: existing, isNewUser: false };
@@ -63,7 +66,10 @@ export class UsersService {
   }
 
   /** Idempotent: creates the user with ADMIN if missing, promotes an existing user to include ADMIN otherwise. */
-  async upsertAdmin(phone: string, countryId: string): Promise<{ user: UserDocument; outcome: AdminSeedOutcome }> {
+  async upsertAdmin(
+    phone: string,
+    countryId: string,
+  ): Promise<{ user: UserDocument; outcome: AdminSeedOutcome }> {
     const existing = await this.userModel.findOne({ phone, isDeleted: false }).exec();
 
     if (!existing) {

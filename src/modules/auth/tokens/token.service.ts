@@ -75,18 +75,28 @@ export class TokenService {
       throw new UnauthorizedException('Unknown refresh token');
     }
 
-    if (record.status !== RefreshTokenStatus.ACTIVE) {
-      // A token that's already been rotated (or revoked) is being presented
-      // again. That only happens if it leaked and is now held by two parties
-      // — the legitimate client already moved on to its rotated successor,
-      // so this presenter isn't it. Burn the whole lineage, not just this token.
+    if (record.status === RefreshTokenStatus.REVOKED) {
+      // Explicitly killed (logout, logout-all, or a prior reuse event) — a
+      // retry here is a stale client, not necessarily an attack, so this
+      // does NOT escalate to a family-wide revoke (logout already did its
+      // job: only *this* session died, not every other device's session).
+      throw new UnauthorizedException('This session has been revoked');
+    }
+
+    if (record.status === RefreshTokenStatus.ROTATED) {
+      // This exact token was already exchanged for a newer one, and is being
+      // presented again. That only happens if it leaked and is now held by
+      // two parties — the legitimate client already moved on to its rotated
+      // successor, so this presenter isn't it. Burn the whole lineage.
       await this.refreshTokenModel
         .updateMany(
           { familyId: record.familyId, status: { $ne: RefreshTokenStatus.REVOKED } },
           { status: RefreshTokenStatus.REVOKED, revokedAt: new Date() },
         )
         .exec();
-      this.logger.warn(`Refresh token reuse detected — revoked family ${record.familyId} (user ${record.userId})`);
+      this.logger.warn(
+        `Refresh token reuse detected — revoked family ${record.familyId} (user ${record.userId})`,
+      );
       throw new UnauthorizedException('Session revoked due to detected token reuse');
     }
 
@@ -110,7 +120,10 @@ export class TokenService {
       return;
     }
     await this.refreshTokenModel
-      .updateOne({ jti: payload.jti }, { status: RefreshTokenStatus.REVOKED, revokedAt: new Date() })
+      .updateOne(
+        { jti: payload.jti },
+        { status: RefreshTokenStatus.REVOKED, revokedAt: new Date() },
+      )
       .exec();
   }
 

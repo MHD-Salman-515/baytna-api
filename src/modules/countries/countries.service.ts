@@ -11,7 +11,7 @@ import { Country, CountryDocument } from './schemas/country.schema';
 export class CountriesService {
   constructor(@InjectModel(Country.name) private readonly countryModel: Model<CountryDocument>) {}
 
-  async findActive(): Promise<Country[]> {
+  async findActive(): Promise<CountryDocument[]> {
     return this.countryModel.find({ isActive: true, isDeleted: false }).sort({ code: 1 }).exec();
   }
 
@@ -44,9 +44,11 @@ export class CountriesService {
   }
 
   /** Public-facing lookup: only active, non-deleted countries — used to validate phone numbers at signup. */
-  async findActiveById(id: string): Promise<Country> {
+  async findActiveById(id: string): Promise<CountryDocument> {
     this.assertValidId(id);
-    const country = await this.countryModel.findOne({ _id: id, isActive: true, isDeleted: false }).exec();
+    const country = await this.countryModel
+      .findOne({ _id: id, isActive: true, isDeleted: false })
+      .exec();
     if (!country) {
       throw new NotFoundException(`Country ${id} not found or not active`);
     }

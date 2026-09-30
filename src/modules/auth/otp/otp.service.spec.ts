@@ -33,7 +33,10 @@ describe('OtpService', () => {
         OtpService,
         { provide: OTP_STORE, useValue: store },
         { provide: OTP_SENDER, useValue: sender },
-        { provide: ConfigService, useValue: { get: () => 'test-pepper-0123456789012345678901234' } },
+        {
+          provide: ConfigService,
+          useValue: { get: () => 'test-pepper-0123456789012345678901234' },
+        },
       ],
     }).compile();
 

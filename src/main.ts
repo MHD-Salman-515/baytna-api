@@ -40,7 +40,7 @@ async function bootstrap(): Promise<void> {
     .setTitle('Home Services Marketplace API')
     .setDescription('Backend API for the housekeeper marketplace (Syria & Iraq)')
     .setVersion('1.0')
-    .addApiKey({ type: 'apiKey', name: 'x-admin-key', in: 'header' }, 'admin-key')
+    .addBearerAuth({ type: 'http', scheme: 'bearer', bearerFormat: 'JWT' })
     .build();
   const swaggerDocument = SwaggerModule.createDocument(app, swaggerConfig);
   SwaggerModule.setup('docs', app, swaggerDocument);
