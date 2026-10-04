@@ -16,6 +16,9 @@ npm-debug.log*
 # coverage
 coverage/
 
+# local dev document storage (LocalFileStorage) — never committed, contains uploaded files
+.local-storage/
+
 # IDE / local tooling
 .vscode/*
 !.vscode/extensions.json
