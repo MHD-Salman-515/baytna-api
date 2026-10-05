@@ -73,6 +73,7 @@ Quick reference — details for each are in the sections below.
 | `npm run seed:verify` | Confirm seeded data and indexes actually exist in Mongo |
 | `npm run db:doctor` | Diagnose a MongoDB connection problem end to end |
 | `npm run env:check` | Show which env vars are set/missing (values masked) |
+| `npm run purge:documents` | Retention policy enforcement for departed workers' documents (dry-run by default) |
 | `npm run test` | Unit tests (no live database required) |
 | `npm run test:cov` | Unit tests with coverage |
 | `npm run lint` | ESLint (auto-fix) |
@@ -167,6 +168,180 @@ Set `SEED_ADMIN_PHONE=+<full E.164 number>` in `.env` before running `npm run se
 idempotently creates that phone as an `ADMIN` user (or promotes it, if it already exists with
 other roles), inferring the country from the number itself. Log in through the same
 `otp/request` → `otp/verify` flow as anyone else; there's no separate admin login.
+
+## Worker verification (Phase 3)
+
+The most privacy-sensitive data in the product: national ID photos and criminal-record
+certificates for women applying to work in strangers' homes. Every design choice below exists
+because a leak here is a safety incident, not just a data breach.
+
+> **Getting a WORKER-roled account**: there is no self-service "become a worker" endpoint yet
+> (a future phase). `roles` is an array (Phase 2), so for now the only way a `CUSTOMER` account
+> gains `WORKER` is a direct grant — in dev, that's a one-off script against the `User` model; a
+> real admin-facing "approve worker application" flow is future work, distinct from the document
+> *verification* flow this phase implements.
+
+### Endpoints
+
+Worker (role `WORKER`, own profile only — `workerProfileId` is always resolved server-side from
+the caller's JWT, never accepted as client input):
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/api/v1/workers/me/profile` | Create or update. Never touches `verificationStatus` either way. |
+| GET | `/api/v1/workers/me/profile` | |
+| POST | `/api/v1/workers/me/documents` | multipart; fields `type`, `file`, optional `expiresAt` (required for `CRIMINAL_RECORD`) |
+| GET | `/api/v1/workers/me/documents` | her own, with status — no content/download URL here (see "Access control") |
+| DELETE | `/api/v1/workers/me/documents/:id` | only while her profile is `DRAFT` or `REJECTED` |
+| POST | `/api/v1/workers/me/submit` | `DRAFT`/`REJECTED` → `PENDING_REVIEW`; validates all required document types are present |
+| PATCH | `/api/v1/workers/me/availability` | `{ isAvailable }` — meaningless unless also `APPROVED` |
+
+Admin (role `ADMIN`):
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/v1/admin/workers?status=PENDING_REVIEW` | paginated queue; omit `status` to see everything, including soft-deleted |
+| GET | `/api/v1/admin/workers/:id` | full profile + document list |
+| GET | `/api/v1/admin/workers/:id/documents/:docId/url` | presigned download URL, **writes a `DOCUMENT_VIEWED` audit entry first** |
+| POST | `/api/v1/admin/workers/:id/documents/:docId/review` | `{ action: "approve" \| "reject", reason? }` |
+| POST | `/api/v1/admin/workers/:id/review` | `{ action: "approve" \| "reject" \| "suspend", reason? }` — `reason` required when rejecting |
+| GET | `/api/v1/admin/audit-logs` | filter by `action`/`actorUserId`/`targetType`/`targetId`/`from`/`to` |
+
+Public (role `CUSTOMER`):
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/v1/workers?cityId=&serviceId=` | `APPROVED` + `isAvailable` only. `serviceId` is accepted but currently a no-op — no worker-to-service relation exists until Phase 4. |
+| GET | `/api/v1/workers/:id` | same filter, single worker |
+
+Both public routes return **only** `{ id, displayName, profilePhotoUrl, bio, rating, cityId,
+serviceAreas }` — see "Public projection" below.
+
+### Verification state machine
+
+`verificationStatus` is never client-settable — every transition goes through
+`assertValidTransition` in `worker-verification.state-machine.ts`:
+
+```
+DRAFT ────submit (complete)───→ PENDING_REVIEW
+REJECTED ─submit (complete)───→ PENDING_REVIEW
+PENDING_REVIEW ──admin approve──→ APPROVED
+PENDING_REVIEW ──admin reject───→ REJECTED
+APPROVED ──admin suspend──→ SUSPENDED
+SUSPENDED ──admin approve──→ APPROVED
+```
+
+Any other transition (skip review, suspend a `DRAFT`, etc.) is rejected with a 400 naming both
+the attempted source and target status. "Complete" for `submit` means: every required document
+type (see below) has at least one non-`REJECTED` document, and a `CRIMINAL_RECORD` document's
+`expiresAt` hasn't already passed.
+
+Required document types are configuration, keyed by country code (`DEFAULT` today, nothing
+country-specific yet — see `document-requirements.config.ts`), not hardcoded in the service.
+
+### Storage: local (dev) vs S3-compatible (prod)
+
+Everything goes through the `FileStorage` interface (`src/modules/storage/`):
+
+- **No object is ever publicly readable.** Reads are always a presigned URL, generated per
+  request, capped at 5 minutes, never cached or stored.
+- **Object keys are unguessable** — 32 random bytes, hex-encoded, no userId/phone/name/document
+  type folded in (`generate-object-key.ts`).
+- **LocalFileStorage** (dev default): writes to `STORAGE_LOCAL_DIR` (default `.local-storage/`,
+  gitignored). There's no real presigned-URL mechanism for a local filesystem, so it fakes one the
+  same way S3 does — an HMAC over `(key, expiry)` — served by a dedicated
+  `GET /_storage/local-download` route that checks the signature and expiry itself.
+- **S3CompatibleStorage**: activates the moment `S3_BUCKET` is set. Plain S3 API only
+  (`@aws-sdk/client-s3` + `@aws-sdk/s3-request-presigner`) — Cloudflare R2, Backblaze B2, MinIO, or
+  real AWS S3 all work by env change alone, nothing else.
+
+#### R2 setup (Cloudflare)
+
+1. Cloudflare dashboard → R2 → create a bucket. Leave it private (R2 buckets have no public
+   access by default — don't enable the public-bucket URL feature).
+2. R2 → Manage API Tokens → create a token scoped to that bucket (read+write).
+3. Set in `.env`:
+   ```
+   S3_BUCKET=<your bucket name>
+   S3_REGION=auto
+   S3_ACCESS_KEY_ID=<from the API token>
+   S3_SECRET_ACCESS_KEY=<from the API token>
+   S3_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
+   ```
+4. Restart the app — `StorageModule`'s factory picks `S3CompatibleStorage` the moment `S3_BUCKET`
+   is non-empty; no code change needed either way.
+
+### Upload validation
+
+Every upload (`POST /workers/me/documents`) goes through, in order:
+
+1. Size check (max 5 MB), enforced by both Multer's own limit and a service-level check.
+2. **Magic-byte detection** (`detectMimeTypeFromMagicBytes`) — the client-supplied `Content-Type`
+   and filename extension are never trusted; only the leading bytes decide the real type. Allowed:
+   JPEG, PNG, PDF.
+3. For `CRIMINAL_RECORD`: `expiresAt` is required, rejected otherwise.
+4. **EXIF stripping** for JPEG/PNG (`stripImageMetadata`, via `sharp` re-encode) — removes GPS
+   coordinates and all other metadata before the file ever reaches storage. (PDFs aren't
+   re-encoded; EXIF is a photo-metadata concept and doesn't apply to them.)
+5. SHA-256 checksum computed over the *post-strip* bytes, stored alongside the document record.
+6. Upload rate limiting: 20 uploads/hour **per user** (`UploadRateLimiterService`) — not per-IP.
+   It's a dedicated in-memory limiter rather than the global `@Throttle()` mechanism, because the
+   global `ThrottlerGuard` runs *before* `JwtAuthGuard` (deliberately, so abusive unauthenticated
+   traffic is rejected cheaply before any auth cost) — which means `request.user` isn't populated
+   yet when a `@Throttle()` tracker would need it. See the comment in
+   `upload-rate-limiter.service.ts`.
+
+### Access control
+
+- A worker can only ever act on **her own** profile/documents — every `workers/me/*` route
+  resolves `workerProfileId` server-side from the JWT, never from client input. There is no route
+  that accepts someone else's id.
+- A `CUSTOMER` cannot reach any document data by any route — the only `@Roles(Role.CUSTOMER)`
+  endpoints are the two public ones, and both return only the allowlisted projection (next
+  section). Document endpoints live exclusively under `@Roles(Role.WORKER)` or
+  `@Roles(Role.ADMIN)`.
+- A `SUSPENDED` or soft-deleted worker disappears from the public routes immediately — both
+  filter `verificationStatus: APPROVED, isAvailable: true, isDeleted: false` on every query, not
+  just at write time.
+- Admin reads are deliberately **not** filtered by `isDeleted`, consistent with every other admin
+  read in this app (audit/recovery visibility) — admin can still review a suspended or
+  soft-deleted worker's documents.
+
+### Public projection
+
+`toPublicWorkerProfile()` (`public-worker-projection.ts`) is a hand-written allowlist — it never
+spreads its input (`{...worker}`), it names exactly 7 output fields one at a time. `phone`,
+`verificationStatus`, `rejectionReason`, `reviewedBy`, `countryId`, and anything else on either the
+`WorkerProfile` or `User` documents has no code path into a public response, now or if either
+schema grows new fields later. `PROFILE_PHOTO` is the one document type that *does* reach a
+customer — once `APPROVED`, its presigned URL is embedded as `profilePhotoUrl` in the projection
+itself; there's still no route that lets a customer list or browse documents directly.
+
+### Audit log
+
+Append-only (`AuditLogService` exposes only `record`/`query`, nothing else, in
+`audit_logs`) — `actorUserId, action, targetType, targetId, ip, userAgent, timestamp, metadata`.
+**Every** admin call to the document-URL endpoint writes a `DOCUMENT_VIEWED` entry *before* the
+presigned URL is generated — if the audit write fails, no URL is returned, no exceptions. Document
+and worker review actions (`DOCUMENT_APPROVED`/`REJECTED`, `WORKER_APPROVED`/`REJECTED`/
+`SUSPENDED`) are logged the same way. Query it via `GET /admin/audit-logs` with any combination of
+filters.
+
+### Document retention
+
+Documents are retained for `DOCUMENT_RETENTION_DAYS` (default 90) after a worker has **left** —
+defined as her `User` account reaching `status: DELETED`, or the `User` record itself being
+soft-deleted — measured from whichever happened. After that window:
+
+```bash
+npm run purge:documents              # dry run — reports what WOULD be purged, changes nothing
+PURGE_EXECUTE=true npm run purge:documents   # actually deletes (storage object + DB row)
+```
+
+Deletion is real, not a soft delete — see the comment on `WorkerDocumentsService#deleteOwn` for
+why that's the deliberate choice for sensitive documents once there's no remaining reason to keep
+them — and each one writes a `DOCUMENT_PURGED` audit entry (`actorUserId: null`: a script, not an
+admin, did it).
 
 ## MongoDB options
 
@@ -331,6 +506,17 @@ set ALLOW_REMOTE_SEED=true&& npm run seed
 ALLOW_REMOTE_SEED=true npm run seed
 ```
 
+**`npm install` fails on `sharp`** (native binary download/build error)
+`sharp` ships prebuilt binaries for common platform/arch combinations; a failure usually means no
+prebuilt binary matches yours (unusual Node version, arch, or libc) or there's no network access
+to fetch it during install. See sharp's own install troubleshooting docs; as a last resort,
+`npm install --platform=<x> --arch=<y> sharp` can force a specific prebuilt binary.
+
+**Document upload returns 400 "File type not recognized"**
+The file's actual bytes don't match JPEG/PNG/PDF's magic number — this is deliberate (see "Upload
+validation" above) and ignores the `Content-Type` header and filename extension entirely. Usually
+means the file is genuinely a different type, or got corrupted/truncated in transit.
+
 **Windows: PowerShell vs CMD vs Git Bash**
 All `npm run ...` scripts in `package.json` are plain cross-shell commands (no `VAR=value cmd`
 inline syntax), so they work unmodified in all three. The difference only shows up when *you*
@@ -377,7 +563,8 @@ curl -X POST http://localhost:3000/api/v1/countries/admin \
 
 ## Endpoints
 
-Auth endpoints are listed under "Authentication" above. Countries/cities:
+Auth endpoints are listed under "Authentication" above; worker/admin/audit-log endpoints under
+"Worker verification" above. Countries/cities:
 
 | Method | Path | Auth | Notes |
 |---|---|---|---|
@@ -402,14 +589,21 @@ src/
   common/        exception filter, response interceptor, pagination DTO,
                  base schema (timestamps + soft delete), localized name schema/DTO,
                  Role enum, @Public/@Roles/@CurrentUser decorators, JwtAuthGuard, RolesGuard
-  database/      Mongoose root connection, idempotent seeders (+ diagnostics: doctor, uri:build)
+  database/      Mongoose root connection, idempotent seeders, diagnostics (doctor, uri:build),
+                 purge-documents (retention policy enforcement)
   modules/
     countries/   implemented
     cities/      implemented
     users/       implemented — schema, PhoneValidationService, UsersService
     auth/        implemented — otp/ (sender + store + service), tokens/ (rotation + reuse
                  detection), auth.controller/service
-    workers/ worker-documents/ services/ worker-services/
+    storage/     implemented — FileStorage interface, Local/S3-compatible implementations,
+                 magic-byte detection + EXIF stripping, generate-object-key
+    audit-log/   implemented — append-only schema/service, admin query endpoint
+    workers/     implemented — profile + document schemas, verification state machine,
+                 required-document config, public projection (allowlist), upload rate limiter,
+                 worker-me/workers-admin/public-workers controllers
+    services/ worker-services/
     bookings/ realtime/locations/ reviews/ reports/ payments/
     notifications/ admin/          empty — later phases
 ```
@@ -434,8 +628,8 @@ src/
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | Global app setup, `countries` + `cities` reference data | **Done** |
-| 2 | Auth: phone OTP, JWT access/refresh with rotation | **Done** (this codebase) |
-| 3 | Worker profiles and documents (national ID, criminal record — private/admin-only storage) | Planned |
+| 2 | Auth: phone OTP, JWT access/refresh with rotation | **Done** |
+| 3 | Worker profiles and documents (national ID, criminal record — private/admin-only storage) | **Done** (this codebase) |
 | 4 | Service catalog and per-worker pricing (`HOURLY` / `BY_SIZE` / `FIXED`) | Planned |
 | 5 | Bookings: `INSTANT` and `SCHEDULED`, trip-like state machine | Planned |
 | 6 | Instant matching (customer ↔ nearby available worker) | Planned |
@@ -456,3 +650,19 @@ Deliberately deferred (real SMS/WhatsApp delivery was out of scope for this phas
 refuses to run when `NODE_ENV=production`) is the only implementation. A future `SmsSender`/
 `WhatsAppSender` — with the SMS-first, WhatsApp-fallback behavior originally envisioned for this
 phase — implements the same interface; nothing else in the OTP flow changes when they land.
+
+### Phase 3 — what shipped, and what didn't
+
+Delivered: everything under "Worker verification" above — private-only `FileStorage`
+(local/S3-compatible) with presigned, time-limited reads; magic-byte-checked, EXIF-stripped,
+size-limited, per-user-rate-limited uploads; the 5-state verification state machine; the explicit
+public-projection allowlist; the append-only audit log with a view-then-read guarantee on every
+admin document access; and the retention/purge script.
+
+Deliberately deferred: a self-service "apply to become a worker" endpoint — Phase 3's spec
+assumed `WORKER`-roled accounts already exist and focused entirely on verifying *documents* for
+workers who have the role, not on how someone acquires the role in the first place. In this
+codebase that's a direct DB grant (dev-only); a real application/approval flow, and an "undelete"
+path for a soft-deleted `WorkerProfile`, are both future work. `serviceId` is accepted on the
+public listing query but has no effect yet — there's no worker-to-service relation until Phase 4's
+catalog exists.

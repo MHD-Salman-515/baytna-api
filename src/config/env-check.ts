@@ -10,6 +10,7 @@ const EXTRA_KNOWN_KEYS = [
   'MONGO_PORT',
   'REDIS_PORT',
   'ALLOW_REMOTE_SEED',
+  'PURGE_EXECUTE',
 ];
 
 const SCHEMA_KEYS = Object.keys(

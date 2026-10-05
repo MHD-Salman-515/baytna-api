@@ -16,6 +16,8 @@ const ALLOWED_TRANSITIONS: Record<VerificationStatus, VerificationStatus[]> = {
  */
 export function assertValidTransition(from: VerificationStatus, to: VerificationStatus): void {
   if (!ALLOWED_TRANSITIONS[from].includes(to)) {
-    throw new BadRequestException(`Cannot transition worker verification status from ${from} to ${to}`);
+    throw new BadRequestException(
+      `Cannot transition worker verification status from ${from} to ${to}`,
+    );
   }
 }

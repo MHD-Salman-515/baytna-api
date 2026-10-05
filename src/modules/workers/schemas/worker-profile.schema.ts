@@ -15,7 +15,9 @@ export enum VerificationStatus {
 
 @Schema({ collection: 'worker_profiles', ...baseSchemaOptions })
 export class WorkerProfile extends BaseSchema {
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true, index: true })
+  // No `index: true` here — the partial unique index below already covers
+  // this field, and having both produced a "duplicate schema index" warning.
+  @Prop({ type: Types.ObjectId, ref: 'User', required: true })
   userId!: Types.ObjectId;
 
   @Prop({ type: Types.ObjectId, ref: 'Country', required: true })
@@ -64,7 +66,10 @@ export const WorkerProfileSchema = SchemaFactory.createForClass(WorkerProfile);
 
 // One profile per user, ever (among non-deleted profiles) — partial unique
 // index, same reasoning as Country.code / User.phone.
-WorkerProfileSchema.index({ userId: 1 }, { unique: true, partialFilterExpression: { isDeleted: false } });
+WorkerProfileSchema.index(
+  { userId: 1 },
+  { unique: true, partialFilterExpression: { isDeleted: false } },
+);
 // The public listing filters/sorts on these together.
 WorkerProfileSchema.index({ verificationStatus: 1, isAvailable: 1 });
 WorkerProfileSchema.index({ serviceAreas: 1 });

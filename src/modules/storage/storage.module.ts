@@ -12,7 +12,10 @@ import { FILE_STORAGE } from './storage.constants';
     LocalFileStorage,
     {
       provide: FILE_STORAGE,
-      useFactory: (configService: ConfigService, localFileStorage: LocalFileStorage): FileStorage => {
+      useFactory: (
+        configService: ConfigService,
+        localFileStorage: LocalFileStorage,
+      ): FileStorage => {
         const bucket = configService.get<string>('s3.bucket');
         if (!bucket) {
           return localFileStorage;

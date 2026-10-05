@@ -15,6 +15,9 @@ import { CountriesModule } from './modules/countries/countries.module';
 import { CitiesModule } from './modules/cities/cities.module';
 import { UsersModule } from './modules/users/users.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { AuditLogModule } from './modules/audit-log/audit-log.module';
+import { StorageModule } from './modules/storage/storage.module';
+import { WorkersModule } from './modules/workers/workers.module';
 
 @Module({
   imports: [
@@ -60,6 +63,9 @@ import { AuthModule } from './modules/auth/auth.module';
     CitiesModule,
     UsersModule,
     AuthModule,
+    AuditLogModule,
+    StorageModule,
+    WorkersModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

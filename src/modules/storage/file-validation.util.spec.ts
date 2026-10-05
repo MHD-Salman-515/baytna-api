@@ -42,7 +42,9 @@ describe('detectMimeTypeFromMagicBytes', () => {
 
 describe('stripImageMetadata', () => {
   async function jpegWithExif(): Promise<Buffer> {
-    return sharp({ create: { width: 4, height: 4, channels: 3, background: { r: 255, g: 0, b: 0 } } })
+    return sharp({
+      create: { width: 4, height: 4, channels: 3, background: { r: 255, g: 0, b: 0 } },
+    })
       .jpeg()
       .withMetadata({ exif: { IFD0: { Copyright: 'should not survive' } } })
       .toBuffer();
@@ -59,7 +61,9 @@ describe('stripImageMetadata', () => {
   });
 
   it('removes EXIF metadata from a PNG', async () => {
-    const withExif = await sharp({ create: { width: 4, height: 4, channels: 3, background: { r: 0, g: 255, b: 0 } } })
+    const withExif = await sharp({
+      create: { width: 4, height: 4, channels: 3, background: { r: 0, g: 255, b: 0 } },
+    })
       .png()
       .withMetadata({ exif: { IFD0: { Copyright: 'should not survive' } } })
       .toBuffer();

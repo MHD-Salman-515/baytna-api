@@ -23,6 +23,7 @@
     "env:check": "ts-node -r tsconfig-paths/register src/config/env-check.ts",
     "db:doctor": "ts-node -r tsconfig-paths/register src/database/doctor.ts",
     "uri:build": "ts-node -r tsconfig-paths/register src/database/build-non-srv-uri.ts",
+    "purge:documents": "ts-node -r tsconfig-paths/register src/database/purge-documents.ts",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
     "db:reset": "docker compose down -v && docker compose up -d",

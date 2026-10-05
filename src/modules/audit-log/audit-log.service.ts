@@ -22,7 +22,9 @@ export interface RecordAuditEntry {
  */
 @Injectable()
 export class AuditLogService {
-  constructor(@InjectModel(AuditLog.name) private readonly auditLogModel: Model<AuditLogDocument>) {}
+  constructor(
+    @InjectModel(AuditLog.name) private readonly auditLogModel: Model<AuditLogDocument>,
+  ) {}
 
   async record(entry: RecordAuditEntry): Promise<void> {
     await this.auditLogModel.create({

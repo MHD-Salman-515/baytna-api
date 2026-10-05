@@ -21,5 +21,10 @@ module.exports = {
     '@typescript-eslint/explicit-function-return-type': 'off',
     '@typescript-eslint/explicit-module-boundary-types': 'off',
     '@typescript-eslint/no-explicit-any': 'warn',
+    // A `_`-prefixed param is a deliberate "required by the interface, unused
+    // by this implementation" signal (e.g. LocalFileStorage.putObject's
+    // contentType) — flagging it as an error forces either a disable-comment
+    // or a fake use at every such call site, for no benefit.
+    '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
   },
 };
