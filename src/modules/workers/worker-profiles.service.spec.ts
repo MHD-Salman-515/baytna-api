@@ -336,6 +336,24 @@ describe('WorkerProfilesService', () => {
     });
   });
 
+  describe('findApprovedById', () => {
+    it('queries by APPROVED + isAvailable + non-deleted — the same visibility rule as the public listing', async () => {
+      profileModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(null) });
+      await service.findApprovedById('profile-1');
+      expect(profileModel.findOne).toHaveBeenCalledWith({
+        _id: 'profile-1',
+        verificationStatus: VerificationStatus.APPROVED,
+        isAvailable: true,
+        isDeleted: false,
+      });
+    });
+
+    it('returns null rather than throwing when not found/approved', async () => {
+      profileModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(null) });
+      await expect(service.findApprovedById('profile-1')).resolves.toBeNull();
+    });
+  });
+
   describe('reviewWorker', () => {
     function pendingProfile() {
       return {

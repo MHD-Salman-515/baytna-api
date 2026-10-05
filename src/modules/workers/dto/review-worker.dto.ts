@@ -1,7 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsIn, IsOptional, ValidateNested } from 'class-validator';
-import { LocalizedTextDto } from './localized-text.dto';
+import { LocalizedTextDto } from '../../../common/dto/localized-text.dto';
 
 export const WORKER_REVIEW_ACTIONS = ['approve', 'reject', 'suspend'] as const;
 export type WorkerReviewAction = (typeof WORKER_REVIEW_ACTIONS)[number];

@@ -174,6 +174,24 @@ export class WorkerProfilesService {
     return profile;
   }
 
+  /**
+   * Used by PricingService to gate quoting on exactly the same visibility
+   * rule as the public listing (APPROVED + available + non-deleted) — a
+   * customer should never be able to get a quote for a worker she couldn't
+   * otherwise see. Returns null rather than throwing; the caller decides
+   * what "not quotable" should look like.
+   */
+  async findApprovedById(workerProfileId: string): Promise<WorkerProfileDocument | null> {
+    return this.profileModel
+      .findOne({
+        _id: workerProfileId,
+        verificationStatus: VerificationStatus.APPROVED,
+        isAvailable: true,
+        isDeleted: false,
+      })
+      .exec();
+  }
+
   async reviewWorker(
     adminUserId: string,
     workerProfileId: string,

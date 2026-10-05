@@ -10,7 +10,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
-import { LocalizedTextDto } from './localized-text.dto';
+import { LocalizedTextDto } from '../../../common/dto/localized-text.dto';
 
 export class UpsertWorkerProfileDto {
   @ApiProperty()

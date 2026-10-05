@@ -10,10 +10,17 @@ import { redactMongoUrisInText } from '../../config/redact-connection-string';
 import { AppModule } from '../../app.module';
 import { City, CityDocument } from '../../modules/cities/schemas/city.schema';
 import { Country, CountryDocument } from '../../modules/countries/schemas/country.schema';
+import {
+  ServicePricingRule,
+  ServicePricingRuleDocument,
+} from '../../modules/services/schemas/service-pricing-rule.schema';
+import { Service, ServiceDocument } from '../../modules/services/schemas/service.schema';
 import { PhoneValidationService } from '../../modules/users/phone-validation.service';
 import { UsersService } from '../../modules/users/users.service';
 import { citiesSeedData } from './cities.seed-data';
 import { countriesSeedData } from './countries.seed-data';
+import { servicePricingRulesSeedData } from './service-pricing-rules.seed-data';
+import { servicesSeedData } from './services.seed-data';
 import { assertLocalMongoUri } from './seed-guard';
 import { UpsertOutcome, upsertWithOutcome } from './upsert-with-outcome';
 
@@ -41,6 +48,10 @@ async function bootstrap(): Promise<void> {
 
     const countryModel = app.get<Model<CountryDocument>>(getModelToken(Country.name));
     const cityModel = app.get<Model<CityDocument>>(getModelToken(City.name));
+    const serviceModel = app.get<Model<ServiceDocument>>(getModelToken(Service.name));
+    const pricingRuleModel = app.get<Model<ServicePricingRuleDocument>>(
+      getModelToken(ServicePricingRule.name),
+    );
 
     const countryIdByCode = new Map<string, string>();
     const countryOutcomes: UpsertOutcome[] = [];
@@ -91,6 +102,61 @@ async function bootstrap(): Promise<void> {
 
     summarize('Countries', countryOutcomes);
     summarize('Cities', cityOutcomes);
+
+    const serviceIdByKey = new Map<string, string>();
+    const serviceOutcomes: UpsertOutcome[] = [];
+    const serviceFields = [
+      'name',
+      'description',
+      'allowedPricingTypes',
+      'commissionRate',
+      'isActive',
+      'displayOrder',
+    ];
+
+    for (const svc of servicesSeedData) {
+      const { key, ...payload } = svc;
+      const outcome = await upsertWithOutcome(
+        serviceModel,
+        { key, isDeleted: false },
+        payload,
+        serviceFields,
+      );
+      serviceOutcomes.push(outcome);
+
+      const doc = await serviceModel.findOne({ key, isDeleted: false }).exec();
+      serviceIdByKey.set(key, doc!._id.toString());
+      logger.log(`Service ${key}: ${outcome}`);
+    }
+    summarize('Services', serviceOutcomes);
+
+    const pricingRuleOutcomes: UpsertOutcome[] = [];
+    const pricingRuleFields = ['minPrice', 'maxPrice', 'unit', 'isActive'];
+
+    for (const rule of servicePricingRulesSeedData) {
+      const serviceId = serviceIdByKey.get(rule.serviceKey);
+      const countryId = countryIdByCode.get(rule.countryCode);
+      if (!serviceId || !countryId) {
+        logger.warn(
+          `Skipping pricing rule ${rule.serviceKey}/${rule.countryCode}/${rule.pricingType}: unknown service or country`,
+        );
+        continue;
+      }
+
+      const { serviceKey, countryCode, pricingType, ...payload } = rule;
+      const outcome = await upsertWithOutcome(
+        pricingRuleModel,
+        { serviceId, countryId, pricingType, isDeleted: false },
+        { ...payload, isActive: true },
+        pricingRuleFields,
+      );
+      pricingRuleOutcomes.push(outcome);
+      logger.log(`Pricing rule ${serviceKey}/${countryCode}/${pricingType}: ${outcome}`);
+    }
+    summarize('Service pricing rules', pricingRuleOutcomes);
+    logger.warn(
+      'Pricing rule ranges are PLACEHOLDERS (see service-pricing-rules.seed-data.ts) — replace with real market values before launch.',
+    );
 
     const seedAdminPhone = process.env.SEED_ADMIN_PHONE;
     if (!seedAdminPhone) {

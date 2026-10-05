@@ -15,7 +15,7 @@ import {
   MAX_FILE_SIZE_BYTES,
   MAX_PRESIGNED_URL_TTL_SECONDS,
 } from '../storage/storage.constants';
-import { LocalizedText } from './schemas/localized-text.schema';
+import { LocalizedText } from '../../common/schemas/localized-text.schema';
 import {
   VerificationStatus,
   WorkerProfile,

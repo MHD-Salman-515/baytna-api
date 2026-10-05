@@ -2,9 +2,11 @@ import { NotFoundException } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
 import { AuditLogService } from '../audit-log/audit-log.service';
+import { ServicesService } from '../services/services.service';
 import { FILE_STORAGE } from '../storage/storage.constants';
 import { VerificationStatus, WorkerProfile } from './schemas/worker-profile.schema';
 import { WorkerDocument } from './schemas/worker-document.schema';
+import { WorkerService } from './schemas/worker-service.schema';
 import { WorkerDocumentsService } from './worker-documents.service';
 import { PublicWorkersService } from './public-workers.service';
 
@@ -104,7 +106,9 @@ describe('Access control guarantees', () => {
         providers: [
           PublicWorkersService,
           { provide: getModelToken(WorkerProfile.name), useValue: profileModel },
+          { provide: getModelToken(WorkerService.name), useValue: { find: jest.fn() } },
           { provide: WorkerDocumentsService, useValue: { getApprovedProfilePhotoUrl: jest.fn() } },
+          { provide: ServicesService, useValue: { findActive: jest.fn().mockResolvedValue([]) } },
         ],
       }).compile();
       publicWorkersService = module.get(PublicWorkersService);

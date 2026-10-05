@@ -9,6 +9,7 @@ import { ReviewDocumentDto } from './dto/review-document.dto';
 import { ReviewWorkerDto } from './dto/review-worker.dto';
 import { WorkerDocumentsService } from './worker-documents.service';
 import { WorkerProfilesService } from './worker-profiles.service';
+import { WorkerServicesService } from './worker-services.service';
 
 @ApiTags('admin/workers')
 @ApiBearerAuth()
@@ -18,6 +19,7 @@ export class WorkersAdminController {
   constructor(
     private readonly workerProfilesService: WorkerProfilesService,
     private readonly workerDocumentsService: WorkerDocumentsService,
+    private readonly workerServicesService: WorkerServicesService,
   ) {}
 
   @Get()
@@ -76,5 +78,11 @@ export class WorkersAdminController {
     @Body() dto: ReviewWorkerDto,
   ) {
     return this.workerProfilesService.reviewWorker(admin.userId, workerProfileId, dto);
+  }
+
+  // Read-only, for support and dispute handling — admins never create or edit a worker's pricing.
+  @Get(':id/services')
+  listServices(@Param('id') workerProfileId: string) {
+    return this.workerServicesService.listForAdmin(workerProfileId);
   }
 }

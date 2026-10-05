@@ -361,6 +361,104 @@ why that's the deliberate choice for sensitive documents once there's no remaini
 them — and each one writes a `DOCUMENT_PURGED` audit entry (`actorUserId: null`: a script, not an
 admin, did it).
 
+## Service catalog and pricing (Phase 4)
+
+**Price range, not free pricing.** An admin defines a min/max price per (service, country,
+pricing model). A worker picks her own price, but it must fall inside that range — there is no
+way for her to price outside it, and no way to price a service at all until an admin has opened
+a range for it in her country.
+
+### Endpoints
+
+Public:
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/v1/services` | active services, catalog metadata only |
+| GET | `/api/v1/service-pricing-rules?serviceId=&countryId=` | the admin-defined ranges — shown in the worker's price-setting UI |
+
+Admin (role `ADMIN`), same CRUD pattern as countries/cities/services:
+
+| Method | Path | Notes |
+|---|---|---|
+| GET/POST/PUT/DELETE | `/api/v1/services/admin[/:id]` | service catalog |
+| GET/POST/PUT/DELETE | `/api/v1/service-pricing-rules/admin[/:id]` | the ranges; unique per (service, country, pricingType) |
+| GET | `/api/v1/admin/workers/:id/services` | read-only — a worker's own pricing, for support/disputes |
+
+Worker (role `WORKER` + `ApprovedWorkerGuard` — offering a priced service is exactly the kind of
+"going live" capability that guard exists for):
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/v1/workers/me/services` | her own offerings |
+| POST | `/api/v1/workers/me/services` | `{ serviceId, pricingType, hourly / bySize / fixed, currency? }` |
+| PATCH | `/api/v1/workers/me/services/:id` | re-validates fully against the (possibly new) pricingType's range |
+| DELETE | `/api/v1/workers/me/services/:id` | soft delete |
+
+Public preview (role `CUSTOMER`, same as worker browsing):
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/v1/pricing/quote?workerServiceId=&estimatedHours=&roomCount=` | `{ price, currency, pricingType, hours?, roomCount? }` — **never** commission or earnings |
+
+### Pricing model
+
+- **HOURLY**: `{ rate, minHours }`. A quote clamps any requested estimate up to `minHours`.
+- **BY_SIZE**: `{ tiers: [{ maxRooms, price }] }` — strictly ascending `maxRooms`, no duplicates.
+  A tier only carries an upper bound, so "no gaps" falls out for free: every room count from 1 up
+  to the top tier's `maxRooms` is covered by exactly one tier the moment the sequence is strictly
+  ascending. A room count past the last tier is rejected, naming the max.
+- **FIXED**: `{ price }`.
+- `currency` is denormalized from her country at creation and **never editable afterwards** — not
+  even via an update DTO that would accept the field (there isn't one). An explicit `currency` at
+  creation must match her country's `currencyCode` exactly or the request is rejected.
+
+Every price (the rate, each tier, the flat price) is validated against the one active
+`ServicePricingRule` for `(serviceId, countryId, pricingType)` — below min, above max, and "no
+rule exists at all" (she can't price a service the admin hasn't opened in her country yet) are
+all rejected with a message naming the actual allowed range. This validation lives in
+`WorkerServicesService`, not just in a DTO — the same full re-validation runs on update, using
+whichever pricing block (existing or newly supplied) ends up matching the resulting pricingType.
+
+### Commission and the rounding rule
+
+Each `Service` carries its own `commissionRate` (basis points); when it's `null`, `PricingService`
+falls back to the country's own `commissionRate`. Whichever rate applies:
+
+```
+commissionAmount = roundHalfUpDivide(basePrice × rateBasisPoints, 10000)
+workerEarnings    = basePrice − commissionAmount
+```
+
+**Round half up**, computed as pure integer arithmetic start to finish (see
+`round-half-up-divide.ts`): the quotient comes from one float division (safe for any integers
+within `Number.MAX_SAFE_INTEGER`), but the rounding decision itself is an exact integer comparison
+(`remainder × 2 >= denominator`), never a float comparison that could be thrown off near the .5
+boundary. `workerEarnings` is defined as `basePrice − commissionAmount`, not independently
+rounded, so the two **always** sum to `basePrice` exactly — proven for a 500-sample random spread
+in `round-half-up-divide.spec.ts`, not just a couple of hand-picked cases.
+
+`PricingService` (`src/modules/pricing/`) is the **only** place this arithmetic exists — a later
+booking phase calls `quote()` (pre-booking estimate) or `recomputeFinal()` (same maths, actual
+values, for completion) rather than reimplementing it. The full internal `Quote` carries
+`commissionAmount`/`workerEarnings`; `toCustomerQuotePreview()` strips both before anything reaches
+`GET /pricing/quote` — same allowlist discipline as the public worker projection, applied here
+too, since commission/earnings are exactly the kind of internal-to-the-platform figures that
+section already treats as never-customer-facing.
+
+### Public discovery
+
+The public worker projection (`toPublicWorkerProfile`) gained one more allowlisted field:
+`services: [{ serviceId, serviceName, pricingType, displayPrice, currency }]` —
+`displayPrice` is the rate (HOURLY), the cheapest/"starting from" tier (BY_SIZE), or the flat price
+(FIXED); see `getDisplayPrice()`. Commission rate and worker earnings have no code path into this
+either. `GET /workers` now has `serviceId` as a real filter (only workers who actively offer that
+service) and `sortBy=price` (only meaningful together with `serviceId` — it's that service's
+price): sorting by a specific service's price can't be expressed as a Mongo-level sort on
+`WorkerProfile` (the price lives in a different collection), so it's resolved in memory instead —
+fine at today's scale, worth revisiting with an aggregation pipeline if the catalog or worker count
+grows enough for "fetch every match unpaginated" to become a real cost.
+
 ## MongoDB options
 
 ### Option A: Atlas (no local install)
@@ -582,7 +680,8 @@ curl -X POST http://localhost:3000/api/v1/countries/admin \
 ## Endpoints
 
 Auth endpoints are listed under "Authentication" above; worker/admin/audit-log endpoints under
-"Worker verification" above. Countries/cities:
+"Worker verification" above; service catalog/pricing/quote endpoints under "Service catalog and
+pricing" above. Countries/cities:
 
 | Method | Path | Auth | Notes |
 |---|---|---|---|
@@ -618,10 +717,13 @@ src/
     storage/     implemented — FileStorage interface, Local/S3-compatible implementations,
                  magic-byte detection + EXIF stripping, generate-object-key
     audit-log/   implemented — append-only schema/service, admin query endpoint
+    services/    implemented — Service catalog, ServicePricingRule (admin-defined ranges)
     workers/     implemented — profile + document schemas, verification state machine,
-                 required-document config, public projection (allowlist), upload rate limiter,
-                 worker-me/workers-admin/public-workers controllers
-    services/ worker-services/
+                 required-document config, worker-service pricing (own validation layer),
+                 public projection (allowlist), upload rate limiter,
+                 worker-me/worker-services/workers-admin/public-workers controllers
+    pricing/     implemented — PricingService (the only place commission/rounding maths
+                 lives), round-half-up-divide, customer-safe quote projection
     bookings/ realtime/locations/ reviews/ reports/ payments/
     notifications/ admin/          empty — later phases
 ```
@@ -648,7 +750,7 @@ src/
 | 1 | Global app setup, `countries` + `cities` reference data | **Done** |
 | 2 | Auth: phone OTP, JWT access/refresh with rotation | **Done** |
 | 3 | Worker profiles and documents (national ID, criminal record — private/admin-only storage) | **Done** (this codebase) |
-| 4 | Service catalog and per-worker pricing (`HOURLY` / `BY_SIZE` / `FIXED`) | Planned |
+| 4 | Service catalog and per-worker pricing (`HOURLY` / `BY_SIZE` / `FIXED`) | **Done** (this codebase) |
 | 5 | Bookings: `INSTANT` and `SCHEDULED`, trip-like state machine | Planned |
 | 6 | Instant matching (customer ↔ nearby available worker) | Planned |
 | 7 | Realtime location tracking during an active booking | Planned |
@@ -682,5 +784,22 @@ retention/purge script.
 Deliberately deferred: an "undelete" path for a soft-deleted `WorkerProfile`, and a richer
 application flow (e.g. an admin-visible queue of *applications* distinct from the document-review
 queue) are both future work — `apply` today is a plain, instant, idempotent grant with no review
-step of its own. `serviceId` is accepted on the public listing query but has no effect yet —
-there's no worker-to-service relation until Phase 4's catalog exists.
+step of its own. (At the time this was written, `serviceId` on the public listing was a no-op
+pending Phase 4's catalog — see the Phase 4 section below for where that landed.)
+
+### Phase 4 — what shipped, and what didn't
+
+Delivered: everything under "Service catalog and pricing" above — the `Service` catalog and
+admin-defined `ServicePricingRule` ranges; `WorkerServicesService`'s full service-layer validation
+(allowed pricing types, range checks at both bounds, BY_SIZE tier ordering, currency match);
+`PricingService` as the single source of pricing maths (commission fallback, integer round-half-up
+with a proven `commission + earnings === basePrice` identity, HOURLY estimate-vs-final entry
+points ready for the booking phase to call); the customer-safe quote preview; and the public
+listing's `serviceId` filter and `sortBy=price` now doing something real.
+
+Deliberately deferred: the seeded pricing-rule ranges are explicit **placeholders** (see the
+warning `npm run seed` prints, and the comment in `service-pricing-rules.seed-data.ts`) — real
+market research has to replace every one before launch. There's no bulk "update all ranges for a
+country" admin endpoint — each range is created/edited one at a time. Sorting by price only works
+when also filtering by `serviceId` (a worker's "price" is otherwise ambiguous across multiple
+services she offers); a cross-service "cheapest worker for anything" sort isn't implemented.

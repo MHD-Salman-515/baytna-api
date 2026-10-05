@@ -1,7 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
 import { BaseSchema, baseSchemaOptions } from '../../../common/schemas/base.schema';
-import { LocalizedText, LocalizedTextSchema } from './localized-text.schema';
+import { LocalizedText, LocalizedTextSchema } from '../../../common/schemas/localized-text.schema';
 
 export type WorkerDocumentDocument = HydratedDocument<WorkerDocument>;
 

@@ -1,3 +1,16 @@
+import { PricingType } from '../../common/enums/pricing-type.enum';
+
+export interface PublicWorkerServiceOffering {
+  serviceId: string;
+  serviceName: { ar: string; en: string };
+  pricingType: PricingType;
+  // The rate (HOURLY), cheapest/"starting from" tier (BY_SIZE), or flat
+  // price (FIXED) — see getDisplayPrice(). Never the commission rate or
+  // anything else internal to pricing.
+  displayPrice: number;
+  currency: string;
+}
+
 export interface PublicWorkerProfile {
   id: string;
   displayName: string;
@@ -6,6 +19,7 @@ export interface PublicWorkerProfile {
   rating: number;
   cityId: string | null;
   serviceAreas: string[];
+  services: PublicWorkerServiceOffering[];
 }
 
 export interface PublicProjectionUserInput {
@@ -24,17 +38,21 @@ export interface PublicProjectionWorkerInput {
 }
 
 /**
- * The ONLY path a WorkerProfile/User pair may take to reach a customer.
- * Deliberately built as a hand-written object literal (never `{...worker}`
- * or a Mongoose `.toObject()`) naming exactly 7 output fields — phone,
- * documents, verificationStatus, countryId, isDeleted, reviewedBy, and
- * everything else on either input simply has no code path into the result,
- * now or if either schema grows new fields later.
+ * The ONLY path a WorkerProfile/User/WorkerService trio may take to reach a
+ * customer. Deliberately built as a hand-written object literal (never
+ * `{...worker}` or a Mongoose `.toObject()`) naming exactly 8 output fields
+ * — phone, documents, verificationStatus, countryId, isDeleted, reviewedBy,
+ * commissionRate, workerEarnings, and everything else on any input simply
+ * has no code path into the result, now or if any schema grows new fields
+ * later. `services` is itself built the same way, field by field — never a
+ * spread of a WorkerService document, which is how a commission rate or
+ * earnings figure would otherwise leak.
  */
 export function toPublicWorkerProfile(
   worker: PublicProjectionWorkerInput,
   user: PublicProjectionUserInput | null,
   profilePhotoUrl: string | null,
+  services: PublicWorkerServiceOffering[],
 ): PublicWorkerProfile {
   const firstName = user?.profile?.firstName;
   const lastName = user?.profile?.lastName;
@@ -48,5 +66,12 @@ export function toPublicWorkerProfile(
     rating: worker.rating,
     cityId: worker.cityId === null ? null : worker.cityId.toString(),
     serviceAreas: worker.serviceAreas.map((city) => city.toString()),
+    services: services.map((offering) => ({
+      serviceId: offering.serviceId,
+      serviceName: { ar: offering.serviceName.ar, en: offering.serviceName.en },
+      pricingType: offering.pricingType,
+      displayPrice: offering.displayPrice,
+      currency: offering.currency,
+    })),
   };
 }
