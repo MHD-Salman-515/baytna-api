@@ -89,6 +89,52 @@ describe('UsersService', () => {
     });
   });
 
+  describe('addRole', () => {
+    it('adds the role when not already present', async () => {
+      const existing = {
+        _id: validId,
+        phone,
+        roles: [Role.CUSTOMER],
+        save: jest.fn().mockResolvedValue(undefined),
+      };
+      model.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(existing) });
+
+      const result = await service.addRole(validId, Role.WORKER);
+
+      expect(result.roles).toEqual([Role.CUSTOMER, Role.WORKER]);
+      expect(existing.save).toHaveBeenCalled();
+    });
+
+    it('is idempotent — does not duplicate or re-save when the role is already present', async () => {
+      const existing = {
+        _id: validId,
+        phone,
+        roles: [Role.CUSTOMER, Role.WORKER],
+        save: jest.fn().mockResolvedValue(undefined),
+      };
+      model.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(existing) });
+
+      const result = await service.addRole(validId, Role.WORKER);
+
+      expect(result.roles).toEqual([Role.CUSTOMER, Role.WORKER]);
+      expect(existing.save).not.toHaveBeenCalled();
+    });
+
+    it('never removes an existing role', async () => {
+      const existing = {
+        _id: validId,
+        phone,
+        roles: [Role.CUSTOMER],
+        save: jest.fn().mockResolvedValue(undefined),
+      };
+      model.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(existing) });
+
+      await service.addRole(validId, Role.WORKER);
+
+      expect(existing.roles).toContain(Role.CUSTOMER);
+    });
+  });
+
   describe('upsertAdmin', () => {
     it('creates a new ADMIN user when none exists', async () => {
       model.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(null) });

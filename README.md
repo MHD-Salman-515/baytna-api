@@ -175,26 +175,44 @@ The most privacy-sensitive data in the product: national ID photos and criminal-
 certificates for women applying to work in strangers' homes. Every design choice below exists
 because a leak here is a safety incident, not just a data breach.
 
-> **Getting a WORKER-roled account**: there is no self-service "become a worker" endpoint yet
-> (a future phase). `roles` is an array (Phase 2), so for now the only way a `CUSTOMER` account
-> gains `WORKER` is a direct grant — in dev, that's a one-off script against the `User` model; a
-> real admin-facing "approve worker application" flow is future work, distinct from the document
-> *verification* flow this phase implements.
+### Worker lifecycle: signup → apply → verify → approve
+
+1. **Signup**: anyone registers via the normal OTP flow (Phase 2) and gets `CUSTOMER` by default.
+2. **Apply**: `POST /workers/me/apply` — any authenticated, `ACTIVE`, non-deleted user may call
+   this. It *adds* `Role.WORKER` to her `roles` array (never replaces `CUSTOMER` — a person can be
+   both) and creates a bare `WorkerProfile` in `DRAFT` if she doesn't have one yet. **Idempotent**:
+   calling it again just returns her existing profile unchanged — it never resets an `APPROVED` or
+   `SUSPENDED` profile back to `DRAFT`. Rejected for `SUSPENDED` or soft-deleted users. Writes a
+   `WORKER_APPLIED` audit entry (once, on creation — not on a repeat call).
+3. **Verify**: she fills in her profile (`POST /workers/me/profile`) and uploads documents, then
+   `POST /workers/me/submit` when complete — exactly the flow described below.
+4. **Approve**: an admin reviews and approves her (`POST /admin/workers/:id/review`).
+
+**The rule that matters: holding `Role.WORKER` is not a capability, it's an application state.**
+Only `verificationStatus === APPROVED` unlocks anything with a real effect — appearing in the
+public list, going available, and (in later phases) setting prices, receiving bookings, going
+online. This is enforced structurally by `ApprovedWorkerGuard`
+(`approved-worker.guard.ts`), not scattered `if` statements — its own doc comment states that
+every future worker-capability route must use it. Routes that are part of *getting* verified
+(profile editing, document upload, submit) deliberately do NOT use it, since requiring approval
+to become approved would be circular.
 
 ### Endpoints
 
-Worker (role `WORKER`, own profile only — `workerProfileId` is always resolved server-side from
-the caller's JWT, never accepted as client input):
+Worker (role `WORKER` — except `apply`, open to any `ACTIVE` user — own profile only;
+`workerProfileId` is always resolved server-side from the caller's JWT, never accepted as client
+input):
 
 | Method | Path | Notes |
 |---|---|---|
+| POST | `/api/v1/workers/me/apply` | Any `ACTIVE` user. Grants `WORKER`, creates `DRAFT` profile. Idempotent. |
 | POST | `/api/v1/workers/me/profile` | Create or update. Never touches `verificationStatus` either way. |
 | GET | `/api/v1/workers/me/profile` | |
 | POST | `/api/v1/workers/me/documents` | multipart; fields `type`, `file`, optional `expiresAt` (required for `CRIMINAL_RECORD`) |
 | GET | `/api/v1/workers/me/documents` | her own, with status — no content/download URL here (see "Access control") |
 | DELETE | `/api/v1/workers/me/documents/:id` | only while her profile is `DRAFT` or `REJECTED` |
 | POST | `/api/v1/workers/me/submit` | `DRAFT`/`REJECTED` → `PENDING_REVIEW`; validates all required document types are present |
-| PATCH | `/api/v1/workers/me/availability` | `{ isAvailable }` — meaningless unless also `APPROVED` |
+| PATCH | `/api/v1/workers/me/availability` | `{ isAvailable }` — **requires `APPROVED`** (`ApprovedWorkerGuard`); rejected outright otherwise, not silently ignored |
 
 Admin (role `ADMIN`):
 
@@ -653,16 +671,16 @@ phase — implements the same interface; nothing else in the OTP flow changes wh
 
 ### Phase 3 — what shipped, and what didn't
 
-Delivered: everything under "Worker verification" above — private-only `FileStorage`
-(local/S3-compatible) with presigned, time-limited reads; magic-byte-checked, EXIF-stripped,
-size-limited, per-user-rate-limited uploads; the 5-state verification state machine; the explicit
-public-projection allowlist; the append-only audit log with a view-then-read guarantee on every
-admin document access; and the retention/purge script.
+Delivered: everything under "Worker verification" above — the self-service `apply` endpoint
+(additive role grant, idempotent, `ApprovedWorkerGuard` enforcing role-is-not-capability on every
+route with a real effect); private-only `FileStorage` (local/S3-compatible) with presigned,
+time-limited reads; magic-byte-checked, EXIF-stripped, size-limited, per-user-rate-limited
+uploads; the 5-state verification state machine; the explicit public-projection allowlist; the
+append-only audit log with a view-then-read guarantee on every admin document access; and the
+retention/purge script.
 
-Deliberately deferred: a self-service "apply to become a worker" endpoint — Phase 3's spec
-assumed `WORKER`-roled accounts already exist and focused entirely on verifying *documents* for
-workers who have the role, not on how someone acquires the role in the first place. In this
-codebase that's a direct DB grant (dev-only); a real application/approval flow, and an "undelete"
-path for a soft-deleted `WorkerProfile`, are both future work. `serviceId` is accepted on the
-public listing query but has no effect yet — there's no worker-to-service relation until Phase 4's
-catalog exists.
+Deliberately deferred: an "undelete" path for a soft-deleted `WorkerProfile`, and a richer
+application flow (e.g. an admin-visible queue of *applications* distinct from the document-review
+queue) are both future work — `apply` today is a plain, instant, idempotent grant with no review
+step of its own. `serviceId` is accepted on the public listing query but has no effect yet —
+there's no worker-to-service relation until Phase 4's catalog exists.

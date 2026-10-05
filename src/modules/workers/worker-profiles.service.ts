@@ -1,10 +1,18 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { PaginatedResult, buildPaginationMeta } from '../../common/dto/paginated-result.interface';
+import { Role } from '../../common/enums/role.enum';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { AuditAction } from '../audit-log/schemas/audit-log.schema';
 import { CountriesService } from '../countries/countries.service';
+import { UserStatus } from '../users/schemas/user.schema';
+import { UsersService } from '../users/users.service';
 import { AdminFindWorkersQueryDto } from './dto/admin-find-workers-query.dto';
 import { ReviewWorkerDto } from './dto/review-worker.dto';
 import { UpsertWorkerProfileDto } from './dto/upsert-worker-profile.dto';
@@ -36,7 +44,47 @@ export class WorkerProfilesService {
     private readonly countriesService: CountriesService,
     private readonly workerDocumentsService: WorkerDocumentsService,
     private readonly auditLogService: AuditLogService,
+    private readonly usersService: UsersService,
   ) {}
+
+  /**
+   * Self-service "become a worker": grants Role.WORKER (additive — never
+   * touches/removes CUSTOMER) and creates a bare DRAFT WorkerProfile if she
+   * doesn't have one. Idempotent: a second call for someone who already has
+   * a profile just returns it as-is — it NEVER resets an existing status
+   * back to DRAFT, which would otherwise let anyone silently un-approve or
+   * un-suspend herself just by calling this again. The audit entry is only
+   * written the first time (profile creation), not on an idempotent replay.
+   */
+  async applyToBecomeWorker(userId: string): Promise<WorkerProfileDocument> {
+    const user = await this.usersService.findById(userId); // throws NotFoundException if missing or soft-deleted
+    if (user.status !== UserStatus.ACTIVE) {
+      throw new ForbiddenException('Only active users can apply to become a worker');
+    }
+
+    await this.usersService.addRole(userId, Role.WORKER);
+
+    const existing = await this.profileModel.findOne({ userId, isDeleted: false }).exec();
+    if (existing) {
+      return existing;
+    }
+
+    const created = await this.profileModel.create({
+      userId,
+      countryId: user.countryId,
+      cityId: user.cityId ?? null,
+    });
+
+    await this.auditLogService.record({
+      actorUserId: userId,
+      action: AuditAction.WORKER_APPLIED,
+      targetType: 'WorkerProfile',
+      targetId: created.id as string,
+      metadata: {},
+    });
+
+    return created;
+  }
 
   /**
    * Create-or-update, scoped to the given userId. Deliberately never touches

@@ -65,6 +65,16 @@ export class UsersService {
     await this.userModel.updateOne({ _id: userId }, { lastLoginAt: new Date() }).exec();
   }
 
+  /** Idempotent: adds `role` if not already present. Never removes any existing role. */
+  async addRole(userId: string, role: Role): Promise<UserDocument> {
+    const user = await this.findById(userId);
+    if (!user.roles.includes(role)) {
+      user.roles = [...user.roles, role];
+      await user.save();
+    }
+    return user;
+  }
+
   /** Idempotent: creates the user with ADMIN if missing, promotes an existing user to include ADMIN otherwise. */
   async upsertAdmin(
     phone: string,

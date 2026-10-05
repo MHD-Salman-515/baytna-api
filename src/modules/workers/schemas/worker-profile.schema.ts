@@ -23,8 +23,12 @@ export class WorkerProfile extends BaseSchema {
   @Prop({ type: Types.ObjectId, ref: 'Country', required: true })
   countryId!: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'City', required: true })
-  cityId!: Types.ObjectId;
+  // Nullable: POST /workers/me/apply creates a bare DRAFT profile with no
+  // body, before she's ever chosen a city — filled in later via
+  // POST /workers/me/profile. Never null by the time she's APPROVED in
+  // practice (that route requires it), but not schema-enforced here.
+  @Prop({ type: Types.ObjectId, ref: 'City', default: null })
+  cityId!: Types.ObjectId | null;
 
   @Prop({ type: LocalizedTextSchema, default: {} })
   bio!: LocalizedText;

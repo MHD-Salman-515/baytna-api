@@ -4,7 +4,7 @@ export interface PublicWorkerProfile {
   profilePhotoUrl: string | null;
   bio: { ar?: string; en?: string };
   rating: number;
-  cityId: string;
+  cityId: string | null;
   serviceAreas: string[];
 }
 
@@ -14,7 +14,10 @@ export interface PublicProjectionUserInput {
 
 export interface PublicProjectionWorkerInput {
   id: string;
-  cityId: { toString(): string } | string;
+  // Nullable because WorkerProfile.cityId is (a profile created via
+  // POST /workers/me/apply starts with no city) — in practice always set by
+  // the time she's APPROVED, but not schema-enforced, so this stays honest.
+  cityId: { toString(): string } | string | null;
   serviceAreas: Array<{ toString(): string } | string>;
   bio?: { ar?: string; en?: string };
   rating: number;
@@ -43,7 +46,7 @@ export function toPublicWorkerProfile(
     profilePhotoUrl,
     bio: { ar: worker.bio?.ar, en: worker.bio?.en },
     rating: worker.rating,
-    cityId: worker.cityId.toString(),
+    cityId: worker.cityId === null ? null : worker.cityId.toString(),
     serviceAreas: worker.serviceAreas.map((city) => city.toString()),
   };
 }

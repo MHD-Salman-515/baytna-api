@@ -1,9 +1,12 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
+import { Role } from '../../common/enums/role.enum';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { AuditAction } from '../audit-log/schemas/audit-log.schema';
 import { CountriesService } from '../countries/countries.service';
+import { UserStatus } from '../users/schemas/user.schema';
+import { UsersService } from '../users/users.service';
 import { DocumentType } from './schemas/worker-document.schema';
 import { VerificationStatus, WorkerProfile } from './schemas/worker-profile.schema';
 import { WorkerDocumentsService } from './worker-documents.service';
@@ -20,6 +23,7 @@ describe('WorkerProfilesService', () => {
   let countriesService: { findActiveById: jest.Mock };
   let workerDocumentsService: { hasAllRequiredDocuments: jest.Mock };
   let auditLogService: { record: jest.Mock };
+  let usersService: { findById: jest.Mock; addRole: jest.Mock };
 
   function chainable(resolvedValue: unknown) {
     const chain: Record<string, jest.Mock> = {};
@@ -38,6 +42,7 @@ describe('WorkerProfilesService', () => {
     countriesService = { findActiveById: jest.fn().mockResolvedValue({ code: 'SY' }) };
     workerDocumentsService = { hasAllRequiredDocuments: jest.fn() };
     auditLogService = { record: jest.fn().mockResolvedValue(undefined) };
+    usersService = { findById: jest.fn(), addRole: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -46,10 +51,112 @@ describe('WorkerProfilesService', () => {
         { provide: CountriesService, useValue: countriesService },
         { provide: WorkerDocumentsService, useValue: workerDocumentsService },
         { provide: AuditLogService, useValue: auditLogService },
+        { provide: UsersService, useValue: usersService },
       ],
     }).compile();
 
     service = module.get(WorkerProfilesService);
+  });
+
+  describe('applyToBecomeWorker', () => {
+    function activeUser(overrides: Record<string, unknown> = {}) {
+      return {
+        id: 'user-1',
+        status: UserStatus.ACTIVE,
+        roles: [Role.CUSTOMER],
+        countryId: 'country-1',
+        cityId: null,
+        ...overrides,
+      };
+    }
+
+    it('grants WORKER while keeping CUSTOMER, and creates a DRAFT profile', async () => {
+      usersService.findById.mockResolvedValue(activeUser());
+      usersService.addRole.mockResolvedValue(activeUser({ roles: [Role.CUSTOMER, Role.WORKER] }));
+      profileModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(null) });
+      profileModel.create.mockResolvedValue({ id: 'profile-1' });
+
+      await service.applyToBecomeWorker('user-1');
+
+      expect(usersService.addRole).toHaveBeenCalledWith('user-1', Role.WORKER);
+      expect(profileModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'user-1', countryId: 'country-1' }),
+      );
+    });
+
+    it('is idempotent: calling it again returns the existing profile without duplicating the role or resetting status', async () => {
+      usersService.findById.mockResolvedValue(activeUser({ roles: [Role.CUSTOMER, Role.WORKER] }));
+      usersService.addRole.mockResolvedValue(activeUser({ roles: [Role.CUSTOMER, Role.WORKER] }));
+      const existingProfile = { id: 'profile-1', verificationStatus: VerificationStatus.DRAFT };
+      profileModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(existingProfile) });
+
+      const result = await service.applyToBecomeWorker('user-1');
+
+      expect(result).toBe(existingProfile);
+      expect(profileModel.create).not.toHaveBeenCalled();
+      // No new audit entry on a no-op replay.
+      expect(auditLogService.record).not.toHaveBeenCalled();
+    });
+
+    it('never resets an APPROVED profile back to DRAFT on a repeat apply', async () => {
+      usersService.findById.mockResolvedValue(activeUser({ roles: [Role.CUSTOMER, Role.WORKER] }));
+      usersService.addRole.mockResolvedValue(activeUser({ roles: [Role.CUSTOMER, Role.WORKER] }));
+      const approvedProfile = { id: 'profile-1', verificationStatus: VerificationStatus.APPROVED };
+      profileModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(approvedProfile) });
+
+      const result = await service.applyToBecomeWorker('user-1');
+
+      expect(result.verificationStatus).toBe(VerificationStatus.APPROVED);
+      expect(profileModel.create).not.toHaveBeenCalled();
+    });
+
+    it('never resets a SUSPENDED profile back to DRAFT on a repeat apply', async () => {
+      usersService.findById.mockResolvedValue(activeUser({ roles: [Role.CUSTOMER, Role.WORKER] }));
+      usersService.addRole.mockResolvedValue(activeUser({ roles: [Role.CUSTOMER, Role.WORKER] }));
+      const suspendedProfile = {
+        id: 'profile-1',
+        verificationStatus: VerificationStatus.SUSPENDED,
+      };
+      profileModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(suspendedProfile) });
+
+      const result = await service.applyToBecomeWorker('user-1');
+
+      expect(result.verificationStatus).toBe(VerificationStatus.SUSPENDED);
+      expect(profileModel.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects a SUSPENDED user', async () => {
+      usersService.findById.mockResolvedValue(activeUser({ status: UserStatus.SUSPENDED }));
+
+      await expect(service.applyToBecomeWorker('user-1')).rejects.toThrow(ForbiddenException);
+      expect(usersService.addRole).not.toHaveBeenCalled();
+      expect(profileModel.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects a soft-deleted or nonexistent user (findById itself throws NotFoundException)', async () => {
+      usersService.findById.mockRejectedValue(new NotFoundException('User not found'));
+
+      await expect(service.applyToBecomeWorker('user-1')).rejects.toThrow(NotFoundException);
+      expect(usersService.addRole).not.toHaveBeenCalled();
+    });
+
+    it('writes a WORKER_APPLIED audit entry on first creation', async () => {
+      usersService.findById.mockResolvedValue(activeUser());
+      usersService.addRole.mockResolvedValue(activeUser({ roles: [Role.CUSTOMER, Role.WORKER] }));
+      profileModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(null) });
+      profileModel.create.mockResolvedValue({ id: 'profile-1' });
+
+      await service.applyToBecomeWorker('user-1');
+
+      expect(auditLogService.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actorUserId: 'user-1',
+          action: AuditAction.WORKER_APPLIED,
+          targetType: 'WorkerProfile',
+          targetId: 'profile-1',
+        }),
+      );
+    });
   });
 
   describe('upsertOwn', () => {

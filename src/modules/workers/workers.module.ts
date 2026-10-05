@@ -3,6 +3,8 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { AuditLogModule } from '../audit-log/audit-log.module';
 import { CountriesModule } from '../countries/countries.module';
 import { StorageModule } from '../storage/storage.module';
+import { UsersModule } from '../users/users.module';
+import { ApprovedWorkerGuard } from './approved-worker.guard';
 import { PublicWorkersController } from './public-workers.controller';
 import { PublicWorkersService } from './public-workers.service';
 import { WorkerDocument, WorkerDocumentSchema } from './schemas/worker-document.schema';
@@ -22,6 +24,7 @@ import { UploadRateLimiterService } from './upload-rate-limiter.service';
     AuditLogModule,
     CountriesModule,
     StorageModule,
+    UsersModule,
   ],
   // WorkerMeController ('workers/me/...') MUST be registered before
   // PublicWorkersController ('workers/:id') — Nest/Express match routes in
@@ -33,6 +36,7 @@ import { UploadRateLimiterService } from './upload-rate-limiter.service';
     WorkerDocumentsService,
     PublicWorkersService,
     UploadRateLimiterService,
+    ApprovedWorkerGuard,
   ],
   exports: [WorkerProfilesService, WorkerDocumentsService],
 })

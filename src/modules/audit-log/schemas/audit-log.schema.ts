@@ -10,9 +10,14 @@ export enum AuditAction {
   WORKER_APPROVED = 'WORKER_APPROVED',
   WORKER_REJECTED = 'WORKER_REJECTED',
   WORKER_SUSPENDED = 'WORKER_SUSPENDED',
-  // Not in the original spec list, added for the retention/purge script
-  // (see purge-documents.ts) — the append-only trail must cover deletions too.
+  // Not in the original Phase 3 spec list, added for the retention/purge
+  // script (see purge-documents.ts) — the append-only trail must cover
+  // deletions too.
   DOCUMENT_PURGED = 'DOCUMENT_PURGED',
+  // Added for the self-service "become a worker" endpoint — records the
+  // moment a CUSTOMER account is granted WORKER and gets her first DRAFT
+  // WorkerProfile. Written once, on creation, not on an idempotent replay.
+  WORKER_APPLIED = 'WORKER_APPLIED',
 }
 
 /**

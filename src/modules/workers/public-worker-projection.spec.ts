@@ -96,4 +96,10 @@ describe('toPublicWorkerProfile', () => {
     expect(result.cityId).toBe('city-1');
     expect(result.serviceAreas).toEqual(['city-1', 'city-2']);
   });
+
+  it('passes through a null cityId rather than throwing — a profile created via POST /workers/me/apply has no city yet', () => {
+    const worker = { ...kitchenSinkWorker(), cityId: null };
+    const result = toPublicWorkerProfile(worker, null, null);
+    expect(result.cityId).toBeNull();
+  });
 });
