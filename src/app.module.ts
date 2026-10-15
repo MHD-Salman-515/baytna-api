@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
+import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import configuration from './config/configuration';
 import { envValidationSchema } from './config/env.validation';
@@ -20,6 +21,7 @@ import { StorageModule } from './modules/storage/storage.module';
 import { ServicesModule } from './modules/services/services.module';
 import { WorkersModule } from './modules/workers/workers.module';
 import { PricingModule } from './modules/pricing/pricing.module';
+import { BookingsModule } from './modules/bookings/bookings.module';
 
 @Module({
   imports: [
@@ -60,6 +62,7 @@ import { PricingModule } from './modules/pricing/pricing.module';
     // never re-exported up. No default secret here either (see TokensModule):
     // both the guard and TokenService always pass an explicit secret.
     JwtModule.register({}),
+    ScheduleModule.forRoot(),
     DatabaseModule,
     CountriesModule,
     CitiesModule,
@@ -70,6 +73,7 @@ import { PricingModule } from './modules/pricing/pricing.module';
     ServicesModule,
     WorkersModule,
     PricingModule,
+    BookingsModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

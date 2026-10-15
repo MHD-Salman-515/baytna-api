@@ -24,6 +24,7 @@ import { WorkerAvailabilityService } from '../workers/worker-availability.servic
 import { WorkerProfilesService } from '../workers/worker-profiles.service';
 import { WorkerServicesService } from '../workers/worker-services.service';
 import { DirectAssignmentStrategy } from './assignment/direct-assignment.strategy';
+import { BookingProjectionInput, BookingViewer, toBookingView } from './booking-projection';
 import { BookingAction, assertValidAction } from './booking.state-machine';
 import { computeFinalPricing } from './compute-final-pricing';
 import { AdminFindBookingsQueryDto } from './dto/admin-find-bookings-query.dto';
@@ -32,6 +33,7 @@ import { FindBookingsQueryDto } from './dto/find-bookings-query.dto';
 import { ForceBookingStatusDto } from './dto/force-booking-status.dto';
 import { generateBookingNumber } from './generate-booking-number';
 import { Booking, BookingDocument, BookingPricingSnapshot } from './schemas/booking.schema';
+import { subtractBusyIntervals, TimeInterval } from './subtract-busy-intervals';
 
 const NON_TERMINAL_STATUSES = [
   BookingStatus.PENDING_WORKER,
@@ -356,6 +358,127 @@ export class BookingsService {
   async getCustomerPhone(customerId: string): Promise<string | null> {
     const user = await this.usersService.findById(customerId);
     return user.phone;
+  }
+
+  async projectForCustomer(booking: BookingDocument): Promise<Record<string, unknown>> {
+    const workerPhone = await this.getWorkerPhone(booking.workerProfileId.toString());
+    return toBookingView(this.toProjectionInput(booking), 'CUSTOMER', {
+      workerPhone,
+      customerPhone: null,
+    });
+  }
+
+  async projectForWorker(booking: BookingDocument): Promise<Record<string, unknown>> {
+    const customerPhone = await this.getCustomerPhone(booking.customerId.toString());
+    return toBookingView(this.toProjectionInput(booking), 'WORKER', {
+      workerPhone: null,
+      customerPhone,
+    });
+  }
+
+  async projectForAdmin(booking: BookingDocument): Promise<Record<string, unknown>> {
+    const [workerPhone, customerPhone] = await Promise.all([
+      this.getWorkerPhone(booking.workerProfileId.toString()),
+      this.getCustomerPhone(booking.customerId.toString()),
+    ]);
+    return toBookingView(this.toProjectionInput(booking), 'ADMIN', { workerPhone, customerPhone });
+  }
+
+  async projectMany(
+    bookings: BookingDocument[],
+    viewer: BookingViewer,
+  ): Promise<Record<string, unknown>[]> {
+    const projector =
+      viewer === 'CUSTOMER'
+        ? this.projectForCustomer.bind(this)
+        : viewer === 'WORKER'
+          ? this.projectForWorker.bind(this)
+          : this.projectForAdmin.bind(this);
+    // N+1 phone lookups per page — acceptable at this phase's scale (small,
+    // paginated lists), same documented tradeoff as the Phase 4 public
+    // worker listing's in-memory price sort. Revisit with a batch lookup if
+    // list endpoints need to scale further.
+    return Promise.all(bookings.map((booking) => projector(booking)));
+  }
+
+  /**
+   * Free windows for one calendar date (her country timezone), with her
+   * existing non-terminal bookings — each expanded by the inter-booking
+   * buffer — subtracted out. Same visibility gate as booking creation: a
+   * customer must never be able to see slots for a worker she couldn't
+   * otherwise book.
+   */
+  async getFreeSlots(workerProfileId: string, isoDate: string): Promise<TimeInterval[]> {
+    const profile = await this.workerProfilesService.findApprovedById(workerProfileId);
+    if (!profile) {
+      throw new NotFoundException('Worker not found');
+    }
+
+    const country = await this.countriesService.findActiveById(profile.countryId.toString());
+    const windows = await this.workerAvailabilityService.getWindowsForDate(
+      workerProfileId,
+      isoDate,
+      country.timezone,
+    );
+    if (windows.length === 0) {
+      return [];
+    }
+
+    const bufferMs = country.bookingPolicy.interBookingBufferMinutes * 60_000;
+    const earliestWindowStart = Math.min(...windows.map((w) => w.start.getTime()));
+    const latestWindowEnd = Math.max(...windows.map((w) => w.end.getTime()));
+    const lookupStart = new Date(earliestWindowStart - bufferMs);
+    const lookupEnd = new Date(latestWindowEnd + bufferMs);
+
+    const existingBookings = await this.bookingModel
+      .find({
+        workerProfileId,
+        status: { $in: NON_TERMINAL_STATUSES },
+        scheduledFor: { $gte: lookupStart, $lte: lookupEnd },
+      })
+      .exec();
+
+    const busy: TimeInterval[] = existingBookings.map((b) => ({
+      start: new Date(b.scheduledFor!.getTime() - bufferMs),
+      end: new Date(b.scheduledFor!.getTime() + b.estimatedDurationMinutes * 60_000 + bufferMs),
+    }));
+
+    return subtractBusyIntervals(windows, busy);
+  }
+
+  private toProjectionInput(booking: BookingDocument): BookingProjectionInput {
+    return {
+      id: booking.id as string,
+      bookingNumber: booking.bookingNumber,
+      customerId: booking.customerId.toString(),
+      workerProfileId: booking.workerProfileId.toString(),
+      serviceId: booking.serviceId.toString(),
+      workerServiceId: booking.workerServiceId.toString(),
+      countryId: booking.countryId.toString(),
+      cityId: booking.cityId.toString(),
+      type: booking.type,
+      status: booking.status,
+      scheduledFor: booking.scheduledFor,
+      estimatedDurationMinutes: booking.estimatedDurationMinutes,
+      address: booking.address,
+      pricing: booking.pricing,
+      finalPricing: booking.finalPricing,
+      responseDeadline: booking.responseDeadline,
+      acceptedAt: booking.acceptedAt,
+      startedAt: booking.startedAt,
+      completedAt: booking.completedAt,
+      cancelledAt: booking.cancelledAt,
+      cancellation: booking.cancellation
+        ? {
+            byUserId: booking.cancellation.byUserId.toString(),
+            byRole: booking.cancellation.byRole,
+            reason: booking.cancellation.reason,
+            feeAmount: booking.cancellation.feeAmount,
+          }
+        : null,
+      rejectionReason: booking.rejectionReason,
+      customerNote: booking.customerNote,
+    };
   }
 
   private async paginate(
