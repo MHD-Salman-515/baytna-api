@@ -64,6 +64,17 @@ export class BookingPricingSnapshot {
 
   @Prop({ type: String, required: true })
   currency!: string;
+
+  // HOURLY only: the rate and minHours in effect AT CREATION TIME, frozen
+  // alongside everything else here. completeBooking() recomputes the final
+  // HOURLY price from these plus the actual elapsed hours — never from the
+  // worker's current WorkerService — so a rate change after this booking
+  // was made can't retroactively change what she's owed for it.
+  @Prop({ type: Number, default: null })
+  hourlyRate!: number | null;
+
+  @Prop({ type: Number, default: null })
+  minHours!: number | null;
 }
 export const BookingPricingSnapshotSchema = SchemaFactory.createForClass(BookingPricingSnapshot);
 
@@ -160,6 +171,12 @@ export class Booking extends BaseSchema {
 
   @Prop({ type: BookingCancellationSchema, default: null })
   cancellation!: BookingCancellation | null;
+
+  // Set by the worker's REJECT action — there's no separate "rejection"
+  // sub-document in the spec's schema, and this is the only place the
+  // required request-body reason for that action has anywhere to go.
+  @Prop({ type: String, default: null })
+  rejectionReason!: string | null;
 
   @Prop({ type: String, default: null })
   customerNote!: string | null;

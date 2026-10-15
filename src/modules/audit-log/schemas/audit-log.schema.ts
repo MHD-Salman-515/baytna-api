@@ -18,6 +18,10 @@ export enum AuditAction {
   // moment a CUSTOMER account is granted WORKER and gets her first DRAFT
   // WorkerProfile. Written once, on creation, not on an idempotent replay.
   WORKER_APPLIED = 'WORKER_APPLIED',
+  // Phase 5 — an admin forcing a booking to CANCELLED or NO_SHOW always
+  // writes one of these, always with a reason (see BookingsService.forceStatus).
+  BOOKING_FORCE_CANCELLED = 'BOOKING_FORCE_CANCELLED',
+  BOOKING_FORCE_NO_SHOW = 'BOOKING_FORCE_NO_SHOW',
 }
 
 /**
