@@ -9,6 +9,11 @@ import { BookingStatus } from '../../common/enums/booking-status.enum';
 export type BookingActor = 'CUSTOMER' | 'WORKER' | 'ADMIN' | 'SYSTEM';
 
 export enum BookingAction {
+  // INSTANT only: a worker claims a SEARCHING booking. Legality here is
+  // necessary but NOT sufficient for correctness — see the doc comment on
+  // this action's table entry for why the real race-safety guarantee lives
+  // in BookingsService.acceptOffer's atomic update, not in this check.
+  ACCEPT_OFFER = 'ACCEPT_OFFER',
   ACCEPT = 'ACCEPT',
   REJECT = 'REJECT',
   ON_THE_WAY = 'ON_THE_WAY',
@@ -20,6 +25,9 @@ export enum BookingAction {
   ADMIN_FORCE_CANCELLED = 'ADMIN_FORCE_CANCELLED',
   ADMIN_FORCE_NO_SHOW = 'ADMIN_FORCE_NO_SHOW',
   EXPIRE = 'EXPIRE',
+  // INSTANT only, system-performed: the total request timeout elapsed with
+  // no acceptance — see InstantMatchingSweepService.
+  EXHAUST_SEARCH = 'EXHAUST_SEARCH',
 }
 
 interface TransitionRule {
@@ -37,9 +45,24 @@ interface TransitionRule {
  *
  * CUSTOMER_CANCEL stops being legal once IN_PROGRESS (the job has started);
  * WORKER_CANCEL only exists from ACCEPTED onward (declining before that is
- * REJECT, not a cancellation) and likewise stops at IN_PROGRESS.
+ * REJECT, not a cancellation) and likewise stops at IN_PROGRESS. A customer
+ * may also cancel out of SEARCHING (Phase 6, INSTANT) — no worker was ever
+ * committed at that point, so BookingsService charges no fee for it.
  */
 const TRANSITIONS: Record<BookingAction, TransitionRule> = {
+  // Legal here, but acceptOffer() does NOT rely on this check for the
+  // actual race-safety guarantee — it performs a single atomic
+  // findOneAndUpdate (status: SEARCHING in the filter) BEFORE this would
+  // even run, so a losing concurrent caller never reaches a point where
+  // this table matters: the booking has already moved to ACCEPTED by the
+  // time its update is attempted, and it simply matches zero documents.
+  // This entry exists for documentation and for the exhaustive table test,
+  // not as the enforcement mechanism.
+  [BookingAction.ACCEPT_OFFER]: {
+    from: [BookingStatus.SEARCHING],
+    to: BookingStatus.ACCEPTED,
+    actor: 'WORKER',
+  },
   [BookingAction.ACCEPT]: {
     from: [BookingStatus.PENDING_WORKER],
     to: BookingStatus.ACCEPTED,
@@ -72,6 +95,7 @@ const TRANSITIONS: Record<BookingAction, TransitionRule> = {
   },
   [BookingAction.CUSTOMER_CANCEL]: {
     from: [
+      BookingStatus.SEARCHING,
       BookingStatus.PENDING_WORKER,
       BookingStatus.ACCEPTED,
       BookingStatus.ON_THE_WAY,
@@ -109,6 +133,11 @@ const TRANSITIONS: Record<BookingAction, TransitionRule> = {
   [BookingAction.EXPIRE]: {
     from: [BookingStatus.PENDING_WORKER],
     to: BookingStatus.EXPIRED,
+    actor: 'SYSTEM',
+  },
+  [BookingAction.EXHAUST_SEARCH]: {
+    from: [BookingStatus.SEARCHING],
+    to: BookingStatus.NO_WORKER_FOUND,
     actor: 'SYSTEM',
   },
 };

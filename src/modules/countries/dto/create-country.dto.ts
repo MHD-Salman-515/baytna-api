@@ -1,11 +1,14 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  ArrayMinSize,
   ArrayUnique,
   IsArray,
   IsBoolean,
   IsInt,
   IsNotEmpty,
+  IsNumber,
   IsOptional,
   IsString,
   Matches,
@@ -60,6 +63,40 @@ export class CountryBookingPolicyDto {
   cancellationFeeBasisPoints?: number;
 }
 
+export class CountryInstantMatchingPolicyDto {
+  @ApiPropertyOptional({
+    default: [3000, 6000, 10000],
+    description: 'Progressive broadcast radii in meters, nearest first',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(10)
+  @IsNumber({}, { each: true })
+  radiusStepsMeters?: number[];
+
+  @ApiPropertyOptional({ default: 20, description: 'Seconds one wave waits before expanding' })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  waveTimeoutSeconds?: number;
+
+  @ApiPropertyOptional({ default: 90, description: 'Total seconds before NO_WORKER_FOUND' })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  totalRequestTimeoutSeconds?: number;
+
+  @ApiPropertyOptional({
+    default: 120,
+    description: 'Max heartbeat age, in seconds, to stay eligible',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  heartbeatStalenessSeconds?: number;
+}
+
 export class CreateCountryDto {
   @ApiProperty({ example: 'SY', description: 'ISO alpha-2 country code' })
   @IsString()
@@ -91,6 +128,12 @@ export class CreateCountryDto {
   @ValidateNested()
   @Type(() => CountryBookingPolicyDto)
   bookingPolicy?: CountryBookingPolicyDto;
+
+  @ApiPropertyOptional({ type: CountryInstantMatchingPolicyDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CountryInstantMatchingPolicyDto)
+  instantMatchingPolicy?: CountryInstantMatchingPolicyDto;
 
   @ApiPropertyOptional({ type: [String], example: ['CASH'] })
   @IsOptional()

@@ -6,6 +6,13 @@ export interface CountryBookingPolicySeed {
   cancellationFeeBasisPoints: number;
 }
 
+export interface CountryInstantMatchingPolicySeed {
+  radiusStepsMeters: number[];
+  waveTimeoutSeconds: number;
+  totalRequestTimeoutSeconds: number;
+  heartbeatStalenessSeconds: number;
+}
+
 export interface CountrySeed {
   code: string;
   name: { ar: string; en: string };
@@ -15,6 +22,7 @@ export interface CountrySeed {
   commissionRate: number;
   timezone: string;
   bookingPolicy: CountryBookingPolicySeed;
+  instantMatchingPolicy: CountryInstantMatchingPolicySeed;
   isActive: boolean;
 }
 
@@ -29,6 +37,15 @@ const DEFAULT_BOOKING_POLICY: CountryBookingPolicySeed = {
   cancellationFeeBasisPoints: 2000,
 };
 
+// Same reasoning — nominal radii/timeouts, to be tuned per-country once
+// there's real match-rate data (e.g. a sparser market may need wider radii).
+const DEFAULT_INSTANT_MATCHING_POLICY: CountryInstantMatchingPolicySeed = {
+  radiusStepsMeters: [3000, 6000, 10000],
+  waveTimeoutSeconds: 20,
+  totalRequestTimeoutSeconds: 90,
+  heartbeatStalenessSeconds: 120,
+};
+
 export const countriesSeedData: CountrySeed[] = [
   {
     code: 'SY',
@@ -39,6 +56,7 @@ export const countriesSeedData: CountrySeed[] = [
     commissionRate: 1500,
     timezone: 'Asia/Damascus',
     bookingPolicy: DEFAULT_BOOKING_POLICY,
+    instantMatchingPolicy: DEFAULT_INSTANT_MATCHING_POLICY,
     isActive: true,
   },
   {
@@ -50,6 +68,7 @@ export const countriesSeedData: CountrySeed[] = [
     commissionRate: 1500,
     timezone: 'Asia/Baghdad',
     bookingPolicy: DEFAULT_BOOKING_POLICY,
+    instantMatchingPolicy: DEFAULT_INSTANT_MATCHING_POLICY,
     isActive: true,
   },
 ];

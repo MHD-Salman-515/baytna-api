@@ -64,6 +64,7 @@ async function bootstrap(): Promise<void> {
       'commissionRate',
       'timezone',
       'bookingPolicy',
+      'instantMatchingPolicy',
       'isActive',
     ];
 

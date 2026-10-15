@@ -76,4 +76,11 @@ export const envValidationSchema = Joi.object({
   BOOKING_EXPIRY_SWEEP_ENABLED: Joi.boolean().truthy('true').falsy('false').default(true),
   // How often the sweep runs, in seconds.
   BOOKING_EXPIRY_SWEEP_INTERVAL_SECONDS: Joi.number().integer().positive().default(300),
+
+  // --- INSTANT matching (Phase 6) ---
+  // Disables the periodic wave-expansion/timeout sweep entirely. See InstantMatchingSweepService.
+  BOOKING_INSTANT_SWEEP_ENABLED: Joi.boolean().truthy('true').falsy('false').default(true),
+  // How often the sweep runs, in seconds — deliberately more frequent than
+  // the expiry sweep, since wave timeouts can be as short as ~20s.
+  BOOKING_INSTANT_SWEEP_INTERVAL_SECONDS: Joi.number().integer().positive().default(5),
 });

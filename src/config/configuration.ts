@@ -27,6 +27,8 @@ export interface AppConfig {
   booking: {
     expirySweepEnabled: boolean;
     expirySweepIntervalSeconds: number;
+    instantMatchingSweepEnabled: boolean;
+    instantMatchingSweepIntervalSeconds: number;
   };
 }
 
@@ -63,6 +65,11 @@ export default (): AppConfig => {
       expirySweepEnabled: process.env.BOOKING_EXPIRY_SWEEP_ENABLED !== 'false',
       expirySweepIntervalSeconds: parseInt(
         process.env.BOOKING_EXPIRY_SWEEP_INTERVAL_SECONDS ?? '300',
+        10,
+      ),
+      instantMatchingSweepEnabled: process.env.BOOKING_INSTANT_SWEEP_ENABLED !== 'false',
+      instantMatchingSweepIntervalSeconds: parseInt(
+        process.env.BOOKING_INSTANT_SWEEP_INTERVAL_SECONDS ?? '5',
         10,
       ),
     },

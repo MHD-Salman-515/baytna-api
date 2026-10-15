@@ -38,6 +38,38 @@ export class CountryBookingPolicy {
 }
 export const CountryBookingPolicySchema = SchemaFactory.createForClass(CountryBookingPolicy);
 
+/**
+ * INSTANT broadcast-matching knobs — Phase 6. Same reasoning as
+ * CountryBookingPolicy: these genuinely vary by market (a sparse rural
+ * market needs wider radius steps and longer timeouts than a dense city)
+ * and must stay admin-editable, never hardcoded in the matching code.
+ */
+@Schema({ _id: false })
+export class CountryInstantMatchingPolicy {
+  // Progressive broadcast radii, in meters, nearest first. Exhausted at the
+  // last step: subsequent wave ticks keep re-broadcasting at that same
+  // radius (to catch newly-online workers) until the total timeout.
+  @Prop({ type: [Number], required: true, default: [3000, 6000, 10000] })
+  radiusStepsMeters!: number[];
+
+  // How long one wave waits for an acceptance before expanding/re-broadcasting.
+  @Prop({ type: Number, required: true, min: 1, default: 20 })
+  waveTimeoutSeconds!: number;
+
+  // Total time budget across every wave before the booking moves to NO_WORKER_FOUND.
+  @Prop({ type: Number, required: true, min: 1, default: 90 })
+  totalRequestTimeoutSeconds!: number;
+
+  // A worker's lastHeartbeatAt older than this makes her ineligible for a
+  // new broadcast wave, even if isOnline is still true (she may have lost
+  // connectivity without explicitly going offline).
+  @Prop({ type: Number, required: true, min: 1, default: 120 })
+  heartbeatStalenessSeconds!: number;
+}
+export const CountryInstantMatchingPolicySchema = SchemaFactory.createForClass(
+  CountryInstantMatchingPolicy,
+);
+
 @Schema({ collection: 'countries', ...baseSchemaOptions })
 export class Country extends BaseSchema {
   @Prop({
@@ -72,6 +104,9 @@ export class Country extends BaseSchema {
 
   @Prop({ type: CountryBookingPolicySchema, default: () => ({}) })
   bookingPolicy!: CountryBookingPolicy;
+
+  @Prop({ type: CountryInstantMatchingPolicySchema, default: () => ({}) })
+  instantMatchingPolicy!: CountryInstantMatchingPolicy;
 
   @Prop({ type: Boolean, default: true })
   isActive!: boolean;

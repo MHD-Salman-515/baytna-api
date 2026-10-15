@@ -14,6 +14,11 @@ const EXPECTED: Record<
   BookingAction,
   { from: BookingStatus[]; to: BookingStatus; actor: BookingActor }
 > = {
+  [BookingAction.ACCEPT_OFFER]: {
+    from: [BookingStatus.SEARCHING],
+    to: BookingStatus.ACCEPTED,
+    actor: 'WORKER',
+  },
   [BookingAction.ACCEPT]: {
     from: [BookingStatus.PENDING_WORKER],
     to: BookingStatus.ACCEPTED,
@@ -46,6 +51,7 @@ const EXPECTED: Record<
   },
   [BookingAction.CUSTOMER_CANCEL]: {
     from: [
+      BookingStatus.SEARCHING,
       BookingStatus.PENDING_WORKER,
       BookingStatus.ACCEPTED,
       BookingStatus.ON_THE_WAY,
@@ -83,6 +89,11 @@ const EXPECTED: Record<
   [BookingAction.EXPIRE]: {
     from: [BookingStatus.PENDING_WORKER],
     to: BookingStatus.EXPIRED,
+    actor: 'SYSTEM',
+  },
+  [BookingAction.EXHAUST_SEARCH]: {
+    from: [BookingStatus.SEARCHING],
+    to: BookingStatus.NO_WORKER_FOUND,
     actor: 'SYSTEM',
   },
 };
