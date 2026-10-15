@@ -451,4 +451,32 @@ describe('WorkerProfilesService', () => {
       expect(profile.reviewedAt).toBeInstanceOf(Date);
     });
   });
+
+  describe('filterApprovedAvailableInCity', () => {
+    it('returns [] without querying when given no ids', async () => {
+      await expect(service.filterApprovedAvailableInCity([], 'city-1')).resolves.toEqual([]);
+      expect(profileModel.find).not.toHaveBeenCalled();
+    });
+
+    it('queries APPROVED + isAvailable + serviceAreas contains cityId, returning the matching ids', async () => {
+      const select = jest.fn().mockReturnValue({
+        exec: jest.fn().mockResolvedValue([{ id: 'worker-1' }, { id: 'worker-3' }]),
+      });
+      profileModel.find.mockReturnValue({ select });
+
+      const result = await service.filterApprovedAvailableInCity(
+        ['worker-1', 'worker-2', 'worker-3'],
+        'city-1',
+      );
+
+      expect(profileModel.find).toHaveBeenCalledWith({
+        _id: { $in: ['worker-1', 'worker-2', 'worker-3'] },
+        verificationStatus: VerificationStatus.APPROVED,
+        isAvailable: true,
+        isDeleted: false,
+        serviceAreas: 'city-1',
+      });
+      expect(result).toEqual(['worker-1', 'worker-3']);
+    });
+  });
 });

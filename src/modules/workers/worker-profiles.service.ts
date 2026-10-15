@@ -192,6 +192,33 @@ export class WorkerProfilesService {
       .exec();
   }
 
+  /**
+   * Used by WorkerPresenceService to narrow a geo-matched candidate list
+   * down to workers who are actually eligible to receive an INSTANT offer:
+   * APPROVED, isAvailable, non-deleted, and serving the requested city.
+   * Returns the subset of the given ids that qualify — order not preserved
+   * (the caller re-sorts by distance, which this has no knowledge of).
+   */
+  async filterApprovedAvailableInCity(
+    workerProfileIds: string[],
+    cityId: string,
+  ): Promise<string[]> {
+    if (workerProfileIds.length === 0) {
+      return [];
+    }
+    const matches = await this.profileModel
+      .find({
+        _id: { $in: workerProfileIds },
+        verificationStatus: VerificationStatus.APPROVED,
+        isAvailable: true,
+        isDeleted: false,
+        serviceAreas: cityId,
+      })
+      .select('_id')
+      .exec();
+    return matches.map((m) => m.id as string);
+  }
+
   async reviewWorker(
     adminUserId: string,
     workerProfileId: string,

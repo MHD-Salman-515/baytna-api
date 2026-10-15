@@ -395,4 +395,54 @@ describe('WorkerServicesService', () => {
       );
     });
   });
+
+  describe('filterActiveOfferingForService', () => {
+    it('returns [] without querying when given no ids', async () => {
+      await expect(service.filterActiveOfferingForService([], serviceId)).resolves.toEqual([]);
+      expect(workerServiceModel.find).not.toHaveBeenCalled();
+    });
+
+    it('returns the subset of ids with an active offering for the service', async () => {
+      const select = jest.fn().mockReturnValue({
+        exec: jest.fn().mockResolvedValue([{ workerProfileId: { toString: () => 'worker-1' } }]),
+      });
+      workerServiceModel.find.mockReturnValue({ select });
+
+      const result = await service.filterActiveOfferingForService(
+        ['worker-1', 'worker-2'],
+        serviceId,
+      );
+
+      expect(workerServiceModel.find).toHaveBeenCalledWith({
+        workerProfileId: { $in: ['worker-1', 'worker-2'] },
+        serviceId,
+        isActive: true,
+        isDeleted: false,
+      });
+      expect(result).toEqual(['worker-1']);
+    });
+  });
+
+  describe('findActiveByWorkerAndService', () => {
+    it('throws NotFoundException when she has no active offering for that service', async () => {
+      workerServiceModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(null) });
+      await expect(
+        service.findActiveByWorkerAndService(workerProfileId, serviceId),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('returns her active offering for that service', async () => {
+      const doc = { workerProfileId, serviceId };
+      workerServiceModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(doc) });
+      await expect(service.findActiveByWorkerAndService(workerProfileId, serviceId)).resolves.toBe(
+        doc,
+      );
+      expect(workerServiceModel.findOne).toHaveBeenCalledWith({
+        workerProfileId,
+        serviceId,
+        isActive: true,
+        isDeleted: false,
+      });
+    });
+  });
 });

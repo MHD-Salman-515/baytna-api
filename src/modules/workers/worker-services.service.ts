@@ -85,6 +85,48 @@ export class WorkerServicesService {
     return workerService;
   }
 
+  /**
+   * Used by WorkerPresenceService to narrow a geo-matched candidate list
+   * down to workers who actually offer the requested service (active,
+   * non-deleted). Returns the subset of the given ids that qualify.
+   */
+  async filterActiveOfferingForService(
+    workerProfileIds: string[],
+    serviceId: string,
+  ): Promise<string[]> {
+    if (workerProfileIds.length === 0) {
+      return [];
+    }
+    const matches = await this.workerServiceModel
+      .find({
+        workerProfileId: { $in: workerProfileIds },
+        serviceId,
+        isActive: true,
+        isDeleted: false,
+      })
+      .select('workerProfileId')
+      .exec();
+    return matches.map((m) => m.workerProfileId.toString());
+  }
+
+  /**
+   * Used by BookingsService.acceptOffer to resolve which of the winning
+   * worker's offerings applies to an INSTANT booking's serviceId — unlike
+   * SCHEDULED, no specific WorkerService was chosen up front.
+   */
+  async findActiveByWorkerAndService(
+    workerProfileId: string,
+    serviceId: string,
+  ): Promise<WorkerServiceDocument> {
+    const workerService = await this.workerServiceModel
+      .findOne({ workerProfileId, serviceId, isActive: true, isDeleted: false })
+      .exec();
+    if (!workerService) {
+      throw new NotFoundException('Worker service not found');
+    }
+    return workerService;
+  }
+
   async create(
     workerProfileId: string,
     countryId: string,
