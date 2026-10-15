@@ -6,10 +6,11 @@ booking goes through trip-like stages and the worker swipes to finish it. Multi-
 from day one: nothing about currency, phone prefixes, or locale is hardcoded — it all comes from
 the `countries` collection, and every user/worker/booking references a `countryId`/`cityId`.
 
-**Phases 1–2** (this codebase): global app setup, `countries`/`cities` reference data, and phone-OTP
-authentication (no passwords — sign up and log in with a phone number and a one-time code).
-Everything else (`workers`, `bookings`, ...) is scaffolded as empty module folders for later
-phases — see "Roadmap" below.
+**Phases 1–5** (this codebase): global app setup and `countries`/`cities` reference data;
+phone-OTP authentication (no passwords); worker profiles with document verification; a service
+catalog with admin-defined price ranges and per-worker pricing; and the booking lifecycle itself —
+a customer books an approved worker for a `SCHEDULED` slot, the worker accepts and moves through
+the trip, and completion recomputes the final price. See "Roadmap" below for what's left.
 
 ## Tech stack
 
@@ -438,13 +439,17 @@ boundary. `workerEarnings` is defined as `basePrice − commissionAmount`, not i
 rounded, so the two **always** sum to `basePrice` exactly — proven for a 500-sample random spread
 in `round-half-up-divide.spec.ts`, not just a couple of hand-picked cases.
 
-`PricingService` (`src/modules/pricing/`) is the **only** place this arithmetic exists — a later
-booking phase calls `quote()` (pre-booking estimate) or `recomputeFinal()` (same maths, actual
-values, for completion) rather than reimplementing it. The full internal `Quote` carries
+`PricingService` (`src/modules/pricing/`) is the **only** place this arithmetic exists for a
+pre-booking estimate — `BookingsService.create` (Phase 5) calls `quote()` to freeze a booking's
+pricing snapshot rather than reimplementing it. The full internal `Quote` carries
 `commissionAmount`/`workerEarnings`; `toCustomerQuotePreview()` strips both before anything reaches
 `GET /pricing/quote` — same allowlist discipline as the public worker projection, applied here
 too, since commission/earnings are exactly the kind of internal-to-the-platform figures that
 section already treats as never-customer-facing.
+
+`PricingService.recomputeFinal()` exists but, in the end, **Phase 5's completion flow does not
+call it** — see "Why completion doesn't call `PricingService.recomputeFinal()`" in the Phase 5
+section below for why that turned out to matter.
 
 ### Public discovery
 
@@ -458,6 +463,200 @@ price): sorting by a specific service's price can't be expressed as a Mongo-leve
 `WorkerProfile` (the price lives in a different collection), so it's resolved in memory instead —
 fine at today's scale, worth revisiting with an aggregation pipeline if the catalog or worker count
 grows enough for "fetch every match unpaginated" to become a real cost.
+
+## Bookings (Phase 5)
+
+The heart of the product: a customer books an approved worker for a specific service, the worker
+accepts and moves through the trip, and completion settles the final price. Only `SCHEDULED`
+bookings are creatable in this phase — `INSTANT` exists on the enum and the schema's `type` field
+now so Phase 6 adds a new matching path, not a migration (see "The Phase 6 matching seam" below).
+
+### The trip (state machine)
+
+```
+PENDING_WORKER --accept--> ACCEPTED --on-the-way--> ON_THE_WAY --arrived--> ARRIVED --start--> IN_PROGRESS --complete--> COMPLETED
+      |                        |                        |                     |
+      |--reject--> REJECTED    |--cancel (worker)--> CANCELLED <--cancel (worker/customer)--|
+      |
+      |--expire (system, sweep)--> EXPIRED
+
+Any of PENDING_WORKER / ACCEPTED / ON_THE_WAY / ARRIVED / IN_PROGRESS --admin force-status--> CANCELLED
+Any of ACCEPTED / ON_THE_WAY / ARRIVED / IN_PROGRESS            --admin force-status--> NO_SHOW
+```
+
+`src/modules/bookings/booking.state-machine.ts` is the single source of truth: an explicit table of
+`{ from: Status[], to: Status, actor }` per action (`ACCEPT`, `REJECT`, `ON_THE_WAY`, `ARRIVED`,
+`START`, `COMPLETE`, `CUSTOMER_CANCEL`, `WORKER_CANCEL`, `ADMIN_FORCE_CANCELLED`,
+`ADMIN_FORCE_NO_SHOW`, `EXPIRE`). `assertValidAction(currentStatus, action, actor)` throws
+`ForbiddenException` for a role mismatch (a customer attempting a worker-only action) and
+`BadRequestException` — naming both the current status and the attempted target status — for an
+illegal transition from the right actor. Every status-changing method in `BookingsService` goes
+through it; nothing sets `status` directly. Exhaustively tested: every `(action, status)` pair,
+plus every wrong-actor combination, in `booking.state-machine.spec.ts`.
+
+A customer may cancel from `PENDING_WORKER`/`ACCEPTED`/`ON_THE_WAY`/`ARRIVED` (not once
+`IN_PROGRESS` — the job has started). A worker may cancel from `ACCEPTED`/`ON_THE_WAY`/`ARRIVED`
+only — declining before accepting is `REJECT`, not a cancellation.
+
+### Endpoints
+
+Customer (role `CUSTOMER`):
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/api/v1/bookings` | validates eligibility, availability, and overlap; freezes the pricing snapshot; never accepts a price from the client |
+| GET | `/api/v1/bookings` | her own only, filterable by `status`, paginated |
+| GET | `/api/v1/bookings/:id` | her own only |
+| POST | `/api/v1/bookings/:id/cancel` | `{ reason }` — fee computed per the country's cancellation policy |
+| GET | `/api/v1/workers/:id/slots?date=YYYY-MM-DD` | free windows for the picker — her availability windows minus existing bookings (+ buffer) |
+
+Worker (role `WORKER` + `ApprovedWorkerGuard`, own bookings only):
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/v1/workers/me/bookings` | filterable by `status` |
+| POST | `/api/v1/workers/me/bookings/:id/accept` | |
+| POST | `/api/v1/workers/me/bookings/:id/reject` | `{ reason }` |
+| POST | `/api/v1/workers/me/bookings/:id/on-the-way` | |
+| POST | `/api/v1/workers/me/bookings/:id/arrived` | |
+| POST | `/api/v1/workers/me/bookings/:id/start` | sets `startedAt` |
+| POST | `/api/v1/workers/me/bookings/:id/complete` | the "swipe to finish" action — recomputes `finalPricing` for `HOURLY` from actual elapsed time |
+| POST | `/api/v1/workers/me/bookings/:id/cancel` | `{ reason }` — no fee charged to the customer, but recorded |
+| GET/PUT | `/api/v1/workers/me/availability-windows` | full replace — weekly recurring windows + per-date overrides |
+
+Admin (role `ADMIN`):
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/v1/admin/bookings` | full filters (`status`, `type`, `customerId`, `workerProfileId`, `countryId`), paginated |
+| GET | `/api/v1/admin/bookings/:id` | |
+| POST | `/api/v1/admin/bookings/:id/force-status` | `{ status: CANCELLED \| NO_SHOW, reason }` — always audit-logged (`BOOKING_FORCE_CANCELLED`/`BOOKING_FORCE_NO_SHOW`) |
+
+### Creating a booking
+
+`BookingsService.create` validates, in order: the worker is `APPROVED` + available (the same
+visibility gate `PricingService` uses — a customer can never book a worker she couldn't otherwise
+see, and the error never reveals which check actually failed); the requested `cityId` is one of
+her `serviceAreas`; the service is active in her country; `scheduledFor` is in the future and
+within the country's `bookingPolicy.bookingHorizonDays`; the job fits entirely inside one of her
+available windows for that date (in her country's timezone — see "Worker availability windows"
+below); and it doesn't overlap any of her existing non-terminal bookings once each is expanded by
+`bookingPolicy.interBookingBufferMinutes` on both sides (a travel buffer between jobs). Only then
+does it call `PricingService.quote()` and freeze the result into the booking — a later change to
+her price or the service's commission can never retroactively change this booking.
+`responseDeadline` is `now + bookingPolicy.responseDeadlineHours`, capped at `scheduledFor` itself
+(never later than the job).
+
+### Worker availability windows
+
+`WorkerAvailability` (one document per worker) holds `weeklyWindows: [{ dayOfWeek, startTime,
+endTime }]` (recurring) and `dateOverrides: [{ date, type: BLOCKED | EXTRA, startTime?, endTime?
+}]` (exceptions). An override always **replaces** the weekly pattern for that date rather than
+merging with it — `BLOCKED` means no windows at all that day; `EXTRA` means exactly the one window
+given, instead of whatever the weekly pattern would say. `GET/PUT /workers/me/availability-windows`
+replaces the whole set at once. `WorkerAvailabilityService.getWindowsForDate` resolves a date to
+UTC instants using `luxon` and the worker's **country timezone** (`Country.timezone`, an IANA name
+like `Asia/Damascus`) — never server local time, which matters the moment the server and a
+customer aren't in the same zone.
+
+`GET /workers/:id/slots?date=` (customer-facing picker) takes those windows and subtracts her
+existing non-terminal bookings — each expanded by the buffer — via `subtractBusyIntervals`, a pure
+interval-arithmetic helper, returning the disjoint free remainder.
+
+### Expiry
+
+A periodic sweep (`BookingExpiryService`) `EXPIRE`s any `PENDING_WORKER` booking past its
+`responseDeadline`, registered through `@nestjs/schedule`'s `SchedulerRegistry` (not the static
+`@Interval()` decorator) specifically so the cadence and the on/off switch come from config:
+`BOOKING_EXPIRY_SWEEP_ENABLED` (default `true`) and `BOOKING_EXPIRY_SWEEP_INTERVAL_SECONDS`
+(default `300`). The sweep is **claim-then-update, not read-then-write**: it only uses `find()` to
+discover candidates, then flips each one individually via
+`updateOne({ _id, status: PENDING_WORKER }, { status: EXPIRED })` — the status is re-checked
+inside that same atomic update filter, so if two instances (or two overlapping ticks) race the same
+booking, at most one `updateOne` actually matches; the other matches zero documents instead of
+double-expiring anything or throwing. Safe to run concurrently or back-to-back.
+
+### Cancellation policy
+
+Data-driven per country (`Country.bookingPolicy`, admin-editable via `PUT /countries/admin/:id` —
+**not** hardcoded in the bookings module):
+
+- Customer cancels **more than** `freeCancellationHours` before `scheduledFor` → no fee.
+- Customer cancels at or inside that window → a fee of `cancellationFeeBasisPoints` of
+  `pricing.basePrice` (same `roundHalfUpDivide` used for commission — see Phase 4). The boundary
+  itself belongs to the fee side, not the free side.
+- Worker cancels after accepting → **no fee charged to the customer**, but it's still recorded
+  (`cancellation.byRole = WORKER`, `feeAmount: 0`) — feeds her reliability score in a later phase.
+- The fee is only ever computed and persisted on `booking.cancellation.feeAmount`. **No money
+  moves in this phase** — the wallet arrives in Phase 7.
+
+### Pricing snapshot, `finalPricing`, and why completion doesn't call `PricingService.recomputeFinal()`
+
+`booking.pricing` is frozen at creation from `PricingService.quote()` — `pricingType`, estimated
+`hours`/`roomCount`, `basePrice`, the commission rate/amount actually applied, `workerEarnings`,
+`currency`, and (HOURLY only) the `hourlyRate`/`minHours` **in effect at that moment**. On
+`complete()`, `finalPricing` is computed:
+
+- `BY_SIZE`/`FIXED`: the original snapshot, unchanged.
+- `HOURLY`: actual elapsed time (`completedAt - startedAt`), clamped up to the frozen `minHours`,
+  multiplied by the **frozen** `hourlyRate` — never the worker's current `WorkerService` rate.
+
+This final step deliberately does **not** call `PricingService.recomputeFinal()`, even though that
+method exists and was built in Phase 4 specifically anticipating this call. Two reasons surfaced
+while implementing it: `recomputeFinal()` re-fetches the worker's *current* `WorkerService` rate
+(breaking the "a later rate change must never alter an existing booking" guarantee — for the final
+price, not just the estimate) and re-checks `isAvailable` via the same gate `quote()` uses (a
+worker very plausibly toggles herself unavailable while she's out doing the job she's completing,
+which would then wrongly block her own completion). `compute-final-pricing.ts` instead works
+**only** from what's already frozen on the booking — no live lookups at all — which is both simpler
+and the actually-correct behavior here.
+
+### Access control and the status-dependent projection
+
+A customer's booking list/detail query is scoped by `customerId` in the query itself (never
+fetch-then-filter); a worker's by `workerProfileId`. Until a booking has been `ACCEPTED` **at least
+once** (`acceptedAt !== null`) — not merely "is it currently in an accepted-ish status" — the
+customer never sees the worker's phone, and the worker sees only the city and the `landmark`, never
+the map pin, the free-text address, the floor, or any notes. Once accepted, both stay revealed even
+through a later cancellation (they really did already connect). Admin always sees everything.
+Pricing is projected per viewer too: the customer sees what she pays (`basePrice`), the worker sees
+her own cut (`workerEarnings`), neither sees the commission rate/amount; admin sees the full
+breakdown. All of this is one allowlist function, `booking-projection.ts#toBookingView` — same
+hand-written-object-literal discipline as the Phase 3/4 public worker projection, tested in
+`booking-projection.spec.ts` for every viewer × before/after-acceptance combination.
+
+### The Phase 6 matching seam
+
+The customer picks the worker directly in this phase (via `workerServiceId`), so "who gets this
+booking" is trivial — but it's still behind an interface,
+`BookingAssignmentStrategy.resolveWorker()`, with `DirectAssignmentStrategy` as the only
+implementation `BookingsService.create` uses for `SCHEDULED`. Phase 6 adds a
+`NearestAvailableAssignmentStrategy` for `INSTANT` (searching nearby available workers) as a
+sibling implementation — `BookingsService`'s call site doesn't change, only which strategy gets
+selected for which `BookingType`.
+
+### New environment variables
+
+| Var | Default | Notes |
+|---|---|---|
+| `BOOKING_EXPIRY_SWEEP_ENABLED` | `true` | set `false` to disable the periodic sweep on an instance |
+| `BOOKING_EXPIRY_SWEEP_INTERVAL_SECONDS` | `300` | how often the sweep runs |
+
+(The booking horizon, response deadline, inter-booking buffer, and cancellation-fee policy are
+**not** env vars — they're per-country, data-driven fields on `Country.bookingPolicy`; see
+"Cancellation policy" above.)
+
+### Tests
+
+`booking.state-machine.spec.ts` (every transition × every actor), `bookings.service.spec.ts`
+(creation validation, pricing-snapshot immutability, every lifecycle transition, cancellation fees
+at both sides of the policy boundary, admin force-status + audit log), `compute-final-pricing.spec.ts`
+(HOURLY recompute, minHours enforcement, immutability to a later rate), `booking-projection.spec.ts`
+(phone/address revealed/hidden per viewer × acceptance state), `worker-availability.service.spec.ts`
+(window validation, timezone-correct UTC resolution), `subtract-busy-intervals.spec.ts` (interval
+arithmetic), and `booking-expiry.service.spec.ts` (idempotent, safe under a simulated concurrent
+claim). See "Phase 5 — what shipped, and what didn't" under "Roadmap" below for what's deliberately
+deferred.
 
 ## MongoDB options
 
@@ -681,7 +880,7 @@ curl -X POST http://localhost:3000/api/v1/countries/admin \
 
 Auth endpoints are listed under "Authentication" above; worker/admin/audit-log endpoints under
 "Worker verification" above; service catalog/pricing/quote endpoints under "Service catalog and
-pricing" above. Countries/cities:
+pricing" above; booking/availability-window/slots endpoints under "Bookings" above. Countries/cities:
 
 | Method | Path | Auth | Notes |
 |---|---|---|---|
@@ -720,11 +919,18 @@ src/
     services/    implemented — Service catalog, ServicePricingRule (admin-defined ranges)
     workers/     implemented — profile + document schemas, verification state machine,
                  required-document config, worker-service pricing (own validation layer),
+                 worker availability windows (weekly + date overrides, timezone-correct),
                  public projection (allowlist), upload rate limiter,
-                 worker-me/worker-services/workers-admin/public-workers controllers
+                 worker-me/worker-services/worker-availability/workers-admin/public-workers controllers
     pricing/     implemented — PricingService (the only place commission/rounding maths
                  lives), round-half-up-divide, customer-safe quote projection
-    bookings/ realtime/locations/ reviews/ reports/ payments/
+    bookings/    implemented — Booking schema (frozen pricing snapshot + finalPricing),
+                 explicit role-aware state machine, BookingsService (creation validation,
+                 lifecycle transitions, cancellation fees, admin force-status),
+                 BookingAssignmentStrategy seam (DirectAssignmentStrategy for SCHEDULED),
+                 status-dependent projection (allowlist), expiry sweep (@nestjs/schedule),
+                 customer/worker/admin/slots controllers
+    realtime/ locations/ reviews/ reports/ payments/
     notifications/ admin/          empty — later phases
 ```
 
@@ -751,7 +957,7 @@ src/
 | 2 | Auth: phone OTP, JWT access/refresh with rotation | **Done** |
 | 3 | Worker profiles and documents (national ID, criminal record — private/admin-only storage) | **Done** (this codebase) |
 | 4 | Service catalog and per-worker pricing (`HOURLY` / `BY_SIZE` / `FIXED`) | **Done** (this codebase) |
-| 5 | Bookings: `INSTANT` and `SCHEDULED`, trip-like state machine | Planned |
+| 5 | Bookings: `SCHEDULED` trip-like state machine, availability windows, expiry sweep | **Done** (this codebase) |
 | 6 | Instant matching (customer ↔ nearby available worker) | Planned |
 | 7 | Realtime location tracking during an active booking | Planned |
 | 8 | Reviews and safety (reports, moderation) | Planned |
@@ -803,3 +1009,30 @@ market research has to replace every one before launch. There's no bulk "update 
 country" admin endpoint — each range is created/edited one at a time. Sorting by price only works
 when also filtering by `serviceId` (a worker's "price" is otherwise ambiguous across multiple
 services she offers); a cross-service "cheapest worker for anything" sort isn't implemented.
+
+### Phase 5 — what shipped, and what didn't
+
+Delivered: everything under "Bookings" above — the full `SCHEDULED` lifecycle through an explicit,
+exhaustively tested, role-aware state machine; booking creation's full validation chain (worker
+eligibility, serviceAreas, booking horizon, availability-window fit, overlap + travel buffer) and
+frozen pricing snapshot; worker availability windows with timezone-correct (`luxon` + `Country.timezone`)
+resolution and the customer-facing free-slots picker; completion's `finalPricing` recompute for
+`HOURLY` — built as a dedicated, dependency-free function specifically so it never re-reads a
+live rate or re-checks live availability (see the "why completion doesn't call
+`PricingService.recomputeFinal()`" note in the Bookings section — this was a deliberate deviation
+from what Phase 4 had anticipated, once actually implementing it showed why); the data-driven,
+per-country cancellation policy; the status-dependent allowlist projection (phone/address gated on
+`acceptedAt`); the claim-then-update expiry sweep; and the `BookingAssignmentStrategy` interface
+with `DirectAssignmentStrategy`, ready for Phase 6 to add a sibling strategy without touching the
+booking lifecycle.
+
+Deliberately deferred, by this phase's own explicit scope: `INSTANT` bookings and any matching
+logic — the `BookingType.INSTANT` enum value and the assignment-strategy seam exist precisely so
+Phase 6 adds a path instead of a migration, but `BookingsService.create` only ever sets
+`BookingType.SCHEDULED`. No money moves — `cancellation.feeAmount` is computed and persisted, not
+charged (Phase 7, the wallet). No bulk "update all countries' booking policy" endpoint. The public
+slots endpoint returns raw free `{ start, end }` intervals rather than pre-discretized picker slots
+(e.g. fixed 30-minute increments) — left to the client to chunk for now. No `rejectedAt` /
+`onTheWayAt` / `arrivedAt` timestamp fields — only the four the spec named
+(`acceptedAt`/`startedAt`/`completedAt`/`cancelledAt`) are persisted; a `REJECTED` booking's reason
+is still captured (`rejectionReason`), just without its own timestamp beyond `updatedAt`.
