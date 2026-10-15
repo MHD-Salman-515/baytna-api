@@ -62,6 +62,8 @@ async function bootstrap(): Promise<void> {
       'phonePrefix',
       'enabledPaymentMethods',
       'commissionRate',
+      'timezone',
+      'bookingPolicy',
       'isActive',
     ];
 

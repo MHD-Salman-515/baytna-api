@@ -97,6 +97,7 @@ describe('CountriesService', () => {
       currencyCode: 'SYP',
       phonePrefix: '+963',
       commissionRate: 1500,
+      timezone: 'Asia/Damascus',
     };
 
     it('throws ConflictException when the code already exists', async () => {

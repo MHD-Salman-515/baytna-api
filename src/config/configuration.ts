@@ -24,6 +24,10 @@ export interface AppConfig {
     forcePathStyle: boolean;
   };
   documentRetentionDays: number;
+  booking: {
+    expirySweepEnabled: boolean;
+    expirySweepIntervalSeconds: number;
+  };
 }
 
 export default (): AppConfig => {
@@ -55,5 +59,12 @@ export default (): AppConfig => {
       forcePathStyle: process.env.S3_FORCE_PATH_STYLE === 'true',
     },
     documentRetentionDays: parseInt(process.env.DOCUMENT_RETENTION_DAYS ?? '90', 10),
+    booking: {
+      expirySweepEnabled: process.env.BOOKING_EXPIRY_SWEEP_ENABLED !== 'false',
+      expirySweepIntervalSeconds: parseInt(
+        process.env.BOOKING_EXPIRY_SWEEP_INTERVAL_SECONDS ?? '300',
+        10,
+      ),
+    },
   };
 };

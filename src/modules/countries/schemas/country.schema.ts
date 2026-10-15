@@ -5,6 +5,39 @@ import { LocalizedName, LocalizedNameSchema } from '../../../common/schemas/loca
 
 export type CountryDocument = HydratedDocument<Country>;
 
+/**
+ * Booking-related knobs that genuinely differ by market and must stay
+ * data-driven (editable via PUT /countries/admin/:id), never hardcoded in
+ * the bookings module. Every field has a schema-level default so existing
+ * countries (and the seed data) get sensible values without a migration.
+ */
+@Schema({ _id: false })
+export class CountryBookingPolicy {
+  // How long a worker has to accept/reject before a booking EXPIRES. The
+  // actual deadline is also capped at scheduledFor itself — see
+  // BookingsService.computeResponseDeadline.
+  @Prop({ type: Number, required: true, min: 1, default: 12 })
+  responseDeadlineHours!: number;
+
+  // How far in the future a SCHEDULED booking may be placed.
+  @Prop({ type: Number, required: true, min: 1, default: 90 })
+  bookingHorizonDays!: number;
+
+  // Minimum gap kept free before/after a booking on the same worker's
+  // schedule, for travel time between jobs.
+  @Prop({ type: Number, required: true, min: 0, default: 30 })
+  interBookingBufferMinutes!: number;
+
+  // A customer cancelling more than this many hours before scheduledFor owes no fee.
+  @Prop({ type: Number, required: true, min: 0, default: 24 })
+  freeCancellationHours!: number;
+
+  // Basis points of basePrice owed when a customer cancels inside the free-cancellation window.
+  @Prop({ type: Number, required: true, min: 0, max: 10000, default: 2000 })
+  cancellationFeeBasisPoints!: number;
+}
+export const CountryBookingPolicySchema = SchemaFactory.createForClass(CountryBookingPolicy);
+
 @Schema({ collection: 'countries', ...baseSchemaOptions })
 export class Country extends BaseSchema {
   @Prop({
@@ -30,6 +63,15 @@ export class Country extends BaseSchema {
 
   @Prop({ type: Number, required: true, min: 0, max: 10000 })
   commissionRate!: number;
+
+  // IANA timezone name (e.g. "Asia/Damascus") — bookings and availability
+  // windows are always interpreted in the worker's country timezone, never
+  // server local time. See worker-availability.service.ts.
+  @Prop({ type: String, required: true, default: 'UTC' })
+  timezone!: string;
+
+  @Prop({ type: CountryBookingPolicySchema, default: () => ({}) })
+  bookingPolicy!: CountryBookingPolicy;
 
   @Prop({ type: Boolean, default: true })
   isActive!: boolean;

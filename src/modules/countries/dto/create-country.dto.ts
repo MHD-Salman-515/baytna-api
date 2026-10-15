@@ -5,6 +5,7 @@ import {
   IsArray,
   IsBoolean,
   IsInt,
+  IsNotEmpty,
   IsOptional,
   IsString,
   Matches,
@@ -13,6 +14,51 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { LocalizedNameDto } from '../../../common/dto/localized-name.dto';
+
+export class CountryBookingPolicyDto {
+  @ApiPropertyOptional({ default: 12, description: 'Hours a worker has to accept/reject' })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  responseDeadlineHours?: number;
+
+  @ApiPropertyOptional({
+    default: 90,
+    description: 'Max days in the future a booking may be placed',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  bookingHorizonDays?: number;
+
+  @ApiPropertyOptional({
+    default: 30,
+    description: 'Travel buffer kept free between jobs, in minutes',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  interBookingBufferMinutes?: number;
+
+  @ApiPropertyOptional({
+    default: 24,
+    description: 'Hours before scheduledFor that cancel for free',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  freeCancellationHours?: number;
+
+  @ApiPropertyOptional({
+    default: 2000,
+    description: 'Basis points of basePrice owed on a late cancel',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(10000)
+  cancellationFeeBasisPoints?: number;
+}
 
 export class CreateCountryDto {
   @ApiProperty({ example: 'SY', description: 'ISO alpha-2 country code' })
@@ -34,6 +80,17 @@ export class CreateCountryDto {
   @IsString()
   @Matches(/^\+\d{1,4}$/, { message: 'phonePrefix must look like +963' })
   phonePrefix!: string;
+
+  @ApiProperty({ example: 'Asia/Damascus', description: 'IANA timezone name' })
+  @IsString()
+  @IsNotEmpty()
+  timezone!: string;
+
+  @ApiPropertyOptional({ type: CountryBookingPolicyDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CountryBookingPolicyDto)
+  bookingPolicy?: CountryBookingPolicyDto;
 
   @ApiPropertyOptional({ type: [String], example: ['CASH'] })
   @IsOptional()

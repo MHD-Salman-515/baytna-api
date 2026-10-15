@@ -69,4 +69,11 @@ export const envValidationSchema = Joi.object({
   // profile/account is soft-deleted, before `npm run purge:documents` removes
   // them. See the "Document retention" section in the README.
   DOCUMENT_RETENTION_DAYS: Joi.number().integer().positive().default(90),
+
+  // --- Bookings (Phase 5) ---
+  // Disables the periodic EXPIRED sweep entirely (e.g. for a worker instance
+  // that shouldn't run background jobs). See BookingExpiryService.
+  BOOKING_EXPIRY_SWEEP_ENABLED: Joi.boolean().truthy('true').falsy('false').default(true),
+  // How often the sweep runs, in seconds.
+  BOOKING_EXPIRY_SWEEP_INTERVAL_SECONDS: Joi.number().integer().positive().default(300),
 });
