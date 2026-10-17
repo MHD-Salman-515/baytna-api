@@ -80,7 +80,11 @@ describe('BookingsService', () => {
     findActiveById: jest.Mock;
     findActiveByWorkerAndService: jest.Mock;
   };
-  let workerProfilesService: { findApprovedById: jest.Mock; getForAdmin: jest.Mock };
+  let workerProfilesService: {
+    findApprovedById: jest.Mock;
+    getForAdmin: jest.Mock;
+    getOwn: jest.Mock;
+  };
   let workerAvailabilityService: { getWindowsForDate: jest.Mock };
   let servicesService: { findActiveById: jest.Mock };
   let countriesService: { findActiveById: jest.Mock };
@@ -159,6 +163,7 @@ describe('BookingsService', () => {
     workerProfilesService = {
       findApprovedById: jest.fn().mockResolvedValue(profile),
       getForAdmin: jest.fn().mockResolvedValue(profile),
+      getOwn: jest.fn().mockResolvedValue(profile),
     };
     workerAvailabilityService = {
       getWindowsForDate: jest.fn().mockResolvedValue([
@@ -409,6 +414,52 @@ describe('BookingsService', () => {
       await expect(service.getOwnForCustomer('not-her-id', bookingId)).rejects.toThrow(
         NotFoundException,
       );
+    });
+  });
+
+  describe('isPartyToBooking', () => {
+    function withSelect(resolvedValue: unknown) {
+      bookingModel.findOne.mockReturnValue({
+        select: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue(resolvedValue) }),
+      });
+    }
+
+    it('returns false for a malformed id without ever querying', async () => {
+      await expect(service.isPartyToBooking(customerId, 'not-an-id')).resolves.toBe(false);
+      expect(bookingModel.findOne).not.toHaveBeenCalled();
+    });
+
+    it('returns false when the booking does not exist', async () => {
+      withSelect(null);
+      await expect(service.isPartyToBooking(customerId, bookingId)).resolves.toBe(false);
+    });
+
+    it("returns true for the booking's own customer", async () => {
+      withSelect({ customerId: { toString: () => customerId }, workerProfileId: null });
+      await expect(service.isPartyToBooking(customerId, bookingId)).resolves.toBe(true);
+    });
+
+    it('returns true for the assigned worker (resolved via her own WorkerProfile)', async () => {
+      withSelect({
+        customerId: { toString: () => 'someone-else' },
+        workerProfileId: { toString: () => workerProfileId },
+      });
+      await expect(service.isPartyToBooking('worker-user-id', bookingId)).resolves.toBe(true);
+      expect(workerProfilesService.findApprovedById).not.toHaveBeenCalled(); // uses getOwn, not the public-visibility gate
+    });
+
+    it('returns false for an unrelated user, including one with no worker profile at all', async () => {
+      withSelect({
+        customerId: { toString: () => 'someone-else' },
+        workerProfileId: { toString: () => workerProfileId },
+      });
+      workerProfilesService.getOwn = jest.fn().mockRejectedValue(new NotFoundException());
+      await expect(service.isPartyToBooking('a-random-user', bookingId)).resolves.toBe(false);
+    });
+
+    it('returns false when nobody has been assigned yet (SEARCHING) and the caller is not the customer', async () => {
+      withSelect({ customerId: { toString: () => 'someone-else' }, workerProfileId: null });
+      await expect(service.isPartyToBooking('some-worker-user', bookingId)).resolves.toBe(false);
     });
   });
 

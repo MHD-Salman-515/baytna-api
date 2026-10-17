@@ -23,6 +23,7 @@ import { WorkersModule } from './modules/workers/workers.module';
 import { PricingModule } from './modules/pricing/pricing.module';
 import { BookingsModule } from './modules/bookings/bookings.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
+import { RealtimeModule } from './modules/realtime/realtime.module';
 
 @Module({
   imports: [
@@ -76,6 +77,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     PricingModule,
     BookingsModule,
     NotificationsModule,
+    RealtimeModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

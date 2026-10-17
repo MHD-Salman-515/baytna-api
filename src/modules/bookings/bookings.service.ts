@@ -393,6 +393,40 @@ export class BookingsService {
     return this.loadOrThrow({ _id: this.assertValidId(bookingId), workerProfileId });
   }
 
+  /**
+   * Used by RealtimeGateway to authorize a socket joining a booking's room
+   * — a user may only join rooms for bookings she is a party to, checked
+   * per join, not just once at connection time. `userId` is a plain User
+   * id; `Booking.customerId` is one too, but `Booking.workerProfileId` is
+   * a WorkerProfile id, so the worker side needs one extra lookup. Never
+   * throws — an invalid id, a missing booking, or a customer with no
+   * worker profile are all simply "not a party", not an error.
+   */
+  async isPartyToBooking(userId: string, bookingId: string): Promise<boolean> {
+    if (!Types.ObjectId.isValid(bookingId)) {
+      return false;
+    }
+    const booking = await this.bookingModel
+      .findOne({ _id: bookingId })
+      .select('customerId workerProfileId')
+      .exec();
+    if (!booking) {
+      return false;
+    }
+    if (booking.customerId.toString() === userId) {
+      return true;
+    }
+    if (!booking.workerProfileId) {
+      return false;
+    }
+    try {
+      const profile = await this.workerProfilesService.getOwn(userId);
+      return profile.id === booking.workerProfileId.toString();
+    } catch {
+      return false;
+    }
+  }
+
   async listForAdmin(query: AdminFindBookingsQueryDto): Promise<PaginatedResult<BookingDocument>> {
     const filter: Record<string, unknown> = {};
     if (query.status) filter.status = query.status;
