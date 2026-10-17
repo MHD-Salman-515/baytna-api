@@ -3,6 +3,7 @@ import { getModelToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Types } from 'mongoose';
 import { BookingStatus } from '../../common/enums/booking-status.enum';
+import { BookingType } from '../../common/enums/booking-type.enum';
 import { PricingType } from '../../common/enums/pricing-type.enum';
 import { Role } from '../../common/enums/role.enum';
 import { AuditLogService } from '../audit-log/audit-log.service';
@@ -15,7 +16,10 @@ import { WorkerAvailabilityService } from '../workers/worker-availability.servic
 import { WorkerProfilesService } from '../workers/worker-profiles.service';
 import { WorkerServicesService } from '../workers/worker-services.service';
 import { DirectAssignmentStrategy } from './assignment/direct-assignment.strategy';
+import { NearestAvailableAssignmentStrategy } from './assignment/nearest-available-assignment.strategy';
 import { BookingsService } from './bookings.service';
+import { InstantMatchingService } from './instant-matching.service';
+import { BookingOffer } from './schemas/booking-offer.schema';
 import { Booking } from './schemas/booking.schema';
 
 const bookingId = new Types.ObjectId().toString();
@@ -66,11 +70,16 @@ describe('BookingsService', () => {
   let bookingModel: {
     find: jest.Mock;
     findOne: jest.Mock;
+    findOneAndUpdate: jest.Mock;
     create: jest.Mock;
     countDocuments: jest.Mock;
     exists: jest.Mock;
   };
-  let workerServicesService: { findActiveById: jest.Mock };
+  let bookingOfferModel: { find: jest.Mock };
+  let workerServicesService: {
+    findActiveById: jest.Mock;
+    findActiveByWorkerAndService: jest.Mock;
+  };
   let workerProfilesService: { findApprovedById: jest.Mock; getForAdmin: jest.Mock };
   let workerAvailabilityService: { getWindowsForDate: jest.Mock };
   let servicesService: { findActiveById: jest.Mock };
@@ -78,7 +87,13 @@ describe('BookingsService', () => {
   let pricingService: { quote: jest.Mock };
   let usersService: { findById: jest.Mock };
   let auditLogService: { record: jest.Mock };
-  let assignmentStrategy: { resolveWorker: jest.Mock };
+  let instantMatchingService: {
+    startSearch: jest.Mock;
+    markOutstandingOffersStale: jest.Mock;
+    resolveOffers: jest.Mock;
+  };
+  let directAssignmentStrategy: { resolveWorker: jest.Mock };
+  let nearestAvailableAssignmentStrategy: { resolveWorker: jest.Mock };
 
   const workerServiceId = 'worker-service-1';
   const cityId = 'city-1';
@@ -87,6 +102,7 @@ describe('BookingsService', () => {
 
   const workerService = {
     _id: workerServiceId,
+    id: workerServiceId,
     workerProfileId,
     serviceId: 'service-1',
     pricingType: PricingType.HOURLY,
@@ -130,11 +146,16 @@ describe('BookingsService', () => {
     bookingModel = {
       find: jest.fn(),
       findOne: jest.fn(),
+      findOneAndUpdate: jest.fn(),
       create: jest.fn(),
       countDocuments: jest.fn(),
       exists: jest.fn(),
     };
-    workerServicesService = { findActiveById: jest.fn().mockResolvedValue(workerService) };
+    bookingOfferModel = { find: jest.fn() };
+    workerServicesService = {
+      findActiveById: jest.fn().mockResolvedValue(workerService),
+      findActiveByWorkerAndService: jest.fn().mockResolvedValue(workerService),
+    };
     workerProfilesService = {
       findApprovedById: jest.fn().mockResolvedValue(profile),
       getForAdmin: jest.fn().mockResolvedValue(profile),
@@ -150,10 +171,20 @@ describe('BookingsService', () => {
     servicesService = { findActiveById: jest.fn().mockResolvedValue(service_) };
     countriesService = { findActiveById: jest.fn().mockResolvedValue(country) };
     pricingService = { quote: jest.fn().mockResolvedValue(quote) };
-    usersService = { findById: jest.fn().mockResolvedValue({ phone: '+963900000000' }) };
+    usersService = {
+      findById: jest.fn().mockResolvedValue({ phone: '+963900000000', countryId: 'country-1' }),
+    };
     auditLogService = { record: jest.fn().mockResolvedValue(undefined) };
-    assignmentStrategy = {
+    instantMatchingService = {
+      startSearch: jest.fn().mockResolvedValue(undefined),
+      markOutstandingOffersStale: jest.fn().mockResolvedValue(undefined),
+      resolveOffers: jest.fn().mockResolvedValue(undefined),
+    };
+    directAssignmentStrategy = {
       resolveWorker: jest.fn().mockResolvedValue({ workerProfileId }),
+    };
+    nearestAvailableAssignmentStrategy = {
+      resolveWorker: jest.fn().mockResolvedValue({ workerProfileId: null }),
     };
 
     bookingModel.find.mockReturnValue(chainable([]));
@@ -164,6 +195,7 @@ describe('BookingsService', () => {
       providers: [
         BookingsService,
         { provide: getModelToken(Booking.name), useValue: bookingModel },
+        { provide: getModelToken(BookingOffer.name), useValue: bookingOfferModel },
         { provide: WorkerServicesService, useValue: workerServicesService },
         { provide: WorkerProfilesService, useValue: workerProfilesService },
         { provide: WorkerAvailabilityService, useValue: workerAvailabilityService },
@@ -172,7 +204,12 @@ describe('BookingsService', () => {
         { provide: PricingService, useValue: pricingService },
         { provide: UsersService, useValue: usersService },
         { provide: AuditLogService, useValue: auditLogService },
-        { provide: DirectAssignmentStrategy, useValue: assignmentStrategy },
+        { provide: InstantMatchingService, useValue: instantMatchingService },
+        { provide: DirectAssignmentStrategy, useValue: directAssignmentStrategy },
+        {
+          provide: NearestAvailableAssignmentStrategy,
+          useValue: nearestAvailableAssignmentStrategy,
+        },
       ],
     }).compile();
 
@@ -181,10 +218,27 @@ describe('BookingsService', () => {
 
   function validCreateDto(overrides: Record<string, unknown> = {}) {
     return {
+      type: BookingType.SCHEDULED,
       workerServiceId,
       cityId,
       scheduledFor: '2026-12-01T10:00:00.000Z',
       estimatedDurationMinutes: 120,
+      estimatedHours: 2,
+      address: {
+        point: { type: 'Point', coordinates: [36.3, 33.5] },
+        text: 'Street 1',
+        landmark: 'Blue mosque',
+      },
+      ...overrides,
+    } as never;
+  }
+
+  function validInstantDto(overrides: Record<string, unknown> = {}) {
+    return {
+      type: BookingType.INSTANT,
+      serviceId: 'service-1',
+      cityId,
+      estimatedDurationMinutes: 60,
       estimatedHours: 2,
       address: {
         point: { type: 'Point', coordinates: [36.3, 33.5] },
@@ -303,6 +357,41 @@ describe('BookingsService', () => {
     });
   });
 
+  describe('create (INSTANT)', () => {
+    it('creates a SEARCHING booking with no worker/workerService/pricing yet, and kicks off the search', async () => {
+      const created = await service.create(customerId, validInstantDto());
+
+      expect(bookingModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          customerId,
+          workerProfileId: null,
+          serviceId: 'service-1',
+          workerServiceId: null,
+          type: BookingType.INSTANT,
+          status: BookingStatus.SEARCHING,
+          scheduledFor: null,
+          pricing: null,
+          finalPricing: null,
+          responseDeadline: null,
+          pendingQuoteParams: { estimatedHours: 2, roomCount: null },
+        }),
+      );
+      expect(instantMatchingService.startSearch).toHaveBeenCalledWith(created);
+    });
+
+    it('resolves her country from her own user record, not from any worker', async () => {
+      await service.create(customerId, validInstantDto());
+      expect(usersService.findById).toHaveBeenCalledWith(customerId);
+      expect(countriesService.findActiveById).toHaveBeenCalledWith('country-1');
+    });
+
+    it('rejects when serviceId is missing', async () => {
+      await expect(
+        service.create(customerId, validInstantDto({ serviceId: undefined })),
+      ).rejects.toThrow(BadRequestException);
+    });
+  });
+
   describe('ownership scoping', () => {
     it('getOwnForWorker throws NotFound when the booking belongs to someone else', async () => {
       bookingModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(null) });
@@ -414,6 +503,159 @@ describe('BookingsService', () => {
     });
   });
 
+  describe('acceptOffer', () => {
+    function searchingBooking(overrides: Record<string, unknown> = {}) {
+      const booking: Record<string, unknown> = {
+        _id: bookingId,
+        id: bookingId,
+        status: BookingStatus.ACCEPTED,
+        workerProfileId,
+        acceptedAt: new Date(),
+        serviceId: { toString: () => 'service-1' },
+        pendingQuoteParams: { estimatedHours: 2, roomCount: null },
+        ...overrides,
+      };
+      booking.save = jest.fn().mockResolvedValue(booking);
+      return booking;
+    }
+
+    it('claims the booking via a single atomic findOneAndUpdate filtered on status SEARCHING and workerProfileId null — never read-then-write', async () => {
+      const booking = searchingBooking();
+      bookingModel.findOneAndUpdate.mockReturnValue({ exec: jest.fn().mockResolvedValue(booking) });
+
+      await service.acceptOffer(workerProfileId, bookingId);
+
+      expect(bookingModel.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: bookingId, status: BookingStatus.SEARCHING, workerProfileId: null },
+        expect.objectContaining({ status: BookingStatus.ACCEPTED, workerProfileId }),
+        { new: true },
+      );
+      expect(bookingModel.findOne).not.toHaveBeenCalled();
+    });
+
+    it('rejects with a neutral 409 when another worker already won (the atomic update matched nothing)', async () => {
+      bookingModel.findOneAndUpdate.mockReturnValue({ exec: jest.fn().mockResolvedValue(null) });
+      await expect(service.acceptOffer(workerProfileId, bookingId)).rejects.toThrow(
+        ConflictException,
+      );
+    });
+
+    it("resolves pricing fresh against the winning worker's own offering, and marks every offer resolved", async () => {
+      const booking = searchingBooking();
+      bookingModel.findOneAndUpdate.mockReturnValue({ exec: jest.fn().mockResolvedValue(booking) });
+
+      await service.acceptOffer(workerProfileId, bookingId);
+
+      expect(workerServicesService.findActiveByWorkerAndService).toHaveBeenCalledWith(
+        workerProfileId,
+        'service-1',
+      );
+      expect(pricingService.quote).toHaveBeenCalledWith(workerServiceId, {
+        estimatedHours: 2,
+        roomCount: undefined,
+      });
+      expect(booking.pricing).toEqual(
+        expect.objectContaining({ basePrice: 6000, workerEarnings: 5100 }),
+      );
+      expect(instantMatchingService.resolveOffers).toHaveBeenCalledWith(bookingId, workerProfileId);
+    });
+
+    it('fires N concurrent accept attempts at one booking and exactly one wins, with exactly one workerProfileId ending up on the booking', async () => {
+      let claimed = false;
+      let winningWorkerProfileId: string | null = null;
+
+      // Simulates Mongo's real atomic findOneAndUpdate: only the first
+      // caller whose filter still matches (status still SEARCHING) gets a
+      // document back; every later caller — same tick or not — gets null,
+      // exactly as a real unique "claim" update would under true concurrency.
+      bookingModel.findOneAndUpdate.mockImplementation(
+        (_filter: unknown, update: { workerProfileId: string }) => ({
+          exec: jest.fn().mockImplementation(() => {
+            if (claimed) {
+              return Promise.resolve(null);
+            }
+            claimed = true;
+            winningWorkerProfileId = update.workerProfileId;
+            return Promise.resolve(searchingBooking({ workerProfileId: update.workerProfileId }));
+          }),
+        }),
+      );
+
+      const candidateWorkerIds = ['worker-a', 'worker-b', 'worker-c', 'worker-d', 'worker-e'];
+      const results = await Promise.all(
+        candidateWorkerIds.map((id) =>
+          service
+            .acceptOffer(id, bookingId)
+            .then((booking) => ({
+              outcome: 'won' as const,
+              workerProfileId: booking.workerProfileId,
+            }))
+            .catch(() => ({ outcome: 'lost' as const, workerProfileId: null })),
+        ),
+      );
+
+      const winners = results.filter((r) => r.outcome === 'won');
+      const losers = results.filter((r) => r.outcome === 'lost');
+
+      expect(winners).toHaveLength(1);
+      expect(losers).toHaveLength(4);
+      expect(winningWorkerProfileId).not.toBeNull();
+      expect(winners[0].workerProfileId).toBe(winningWorkerProfileId);
+      expect(candidateWorkerIds).toContain(winningWorkerProfileId);
+    });
+  });
+
+  describe('listPendingOffersForWorker', () => {
+    it('returns [] when she has no pending offers', async () => {
+      bookingOfferModel.find.mockReturnValue(chainable([]));
+      await expect(service.listPendingOffersForWorker(workerProfileId)).resolves.toEqual([]);
+    });
+
+    it('projects each still-SEARCHING offer, skipping any whose booking already resolved (accepted/expired by the time she polls)', async () => {
+      const offers = [
+        {
+          id: 'offer-1',
+          bookingId: { toString: () => 'booking-1' },
+          estimatedPrice: 8000,
+          estimatedWorkerEarnings: 6800,
+          currency: 'SYP',
+          distanceMeters: 1200,
+          sentAt: new Date(),
+        },
+        {
+          id: 'offer-2',
+          bookingId: { toString: () => 'booking-2' }, // no longer SEARCHING -> excluded from bookingModel.find below
+          estimatedPrice: 5000,
+          estimatedWorkerEarnings: 4000,
+          currency: 'SYP',
+          distanceMeters: 2000,
+          sentAt: new Date(),
+        },
+      ];
+      bookingOfferModel.find.mockReturnValue(chainable(offers));
+      bookingModel.find.mockReturnValue(
+        chainable([
+          {
+            id: 'booking-1',
+            serviceId: { toString: () => 'service-1' },
+            estimatedDurationMinutes: 60,
+            cityId: { toString: () => cityId },
+            address: { landmark: 'Blue mosque' },
+          },
+        ]),
+      );
+
+      const views = await service.listPendingOffersForWorker(workerProfileId);
+
+      expect(views).toHaveLength(1);
+      expect(views[0]).toMatchObject({
+        offerId: 'offer-1',
+        estimatedPrice: 8000,
+        landmark: 'Blue mosque',
+      });
+    });
+  });
+
   describe('cancellation fees', () => {
     it('charges no fee when the customer cancels more than the free-cancellation window before scheduledFor', async () => {
       const booking = fakeBooking({
@@ -459,6 +701,22 @@ describe('BookingsService', () => {
       expect(cancellation.feeAmount).toBe(0);
       expect(cancellation.byRole).toBe(Role.WORKER);
       expect(cancellation.byUserId).toBe('worker-user-1');
+    });
+
+    it('charges no fee when the customer cancels while SEARCHING (INSTANT, no worker ever committed) and stops the broadcast', async () => {
+      const booking = fakeBooking({
+        status: BookingStatus.SEARCHING,
+        pricing: null,
+        scheduledFor: null,
+      });
+      bookingModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(booking) });
+
+      await service.cancelByCustomer(customerId, bookingId, 'Changed my mind');
+
+      expect((booking.cancellation as Record<string, unknown>).feeAmount).toBe(0);
+      // Never touches country policy — SEARCHING short-circuits before it's needed.
+      expect(countriesService.findActiveById).not.toHaveBeenCalled();
+      expect(instantMatchingService.markOutstandingOffersStale).toHaveBeenCalledWith(bookingId);
     });
   });
 

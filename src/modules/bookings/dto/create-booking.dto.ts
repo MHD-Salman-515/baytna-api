@@ -2,34 +2,61 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsDateString,
+  IsEnum,
   IsInt,
   IsMongoId,
   IsNumber,
   IsOptional,
   IsString,
   Min,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
+import { BookingType } from '../../../common/enums/booking-type.enum';
 import { BookingAddressDto } from './booking-address.dto';
 
 /**
  * Never a price — the client supplies only enough to compute one (estimated
- * hours / room count), and PricingService.quote() does the rest. Only
- * SCHEDULED is creatable in this phase, so `type` isn't even a field here —
- * BookingsService.create always sets it server-side.
+ * hours / room count), and PricingService.quote() does the rest (at creation
+ * for SCHEDULED, at acceptance for INSTANT — see BookingsService.acceptOffer).
+ *
+ * The two booking types need different fields: SCHEDULED needs a specific
+ * workerServiceId (the customer picked the worker) and a scheduledFor;
+ * INSTANT needs only a serviceId (no worker chosen yet — that's the whole
+ * point of the broadcast) and no scheduledFor (the job starts now). Both
+ * conditional blocks live on one DTO rather than two, since every other
+ * field (cityId, estimatedDurationMinutes, address, ...) is shared.
  */
 export class CreateBookingDto {
-  @ApiProperty({ description: 'The specific WorkerService (offering) being booked' })
-  @IsMongoId()
-  workerServiceId!: string;
+  @ApiProperty({ enum: BookingType })
+  @IsEnum(BookingType)
+  type!: BookingType;
 
-  @ApiProperty({ description: "Must be one of the worker's serviceAreas" })
+  @ApiPropertyOptional({
+    description: 'SCHEDULED only — the specific WorkerService (offering) being booked',
+  })
+  @ValidateIf((dto: CreateBookingDto) => dto.type === BookingType.SCHEDULED)
+  @IsMongoId()
+  workerServiceId?: string;
+
+  @ApiPropertyOptional({ description: 'SCHEDULED only' })
+  @ValidateIf((dto: CreateBookingDto) => dto.type === BookingType.SCHEDULED)
+  @IsDateString()
+  scheduledFor?: string;
+
+  @ApiPropertyOptional({
+    description: 'INSTANT only — no specific worker is chosen; matching finds one',
+  })
+  @ValidateIf((dto: CreateBookingDto) => dto.type === BookingType.INSTANT)
+  @IsMongoId()
+  serviceId?: string;
+
+  @ApiProperty({
+    description:
+      "Must be one of the worker's serviceAreas (SCHEDULED) or a city she could be matched in (INSTANT)",
+  })
   @IsMongoId()
   cityId!: string;
-
-  @ApiProperty({ example: '2026-11-10T09:00:00.000Z' })
-  @IsDateString()
-  scheduledFor!: string;
 
   @ApiProperty({ minimum: 1, description: 'How long the job is expected to take' })
   @IsInt()

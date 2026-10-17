@@ -1,0 +1,161 @@
+import { Inject, Injectable } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model, Types } from 'mongoose';
+import { CountriesService } from '../countries/countries.service';
+import { PricingService } from '../pricing/pricing.service';
+import { WorkerPresenceService } from '../workers/worker-presence.service';
+import { WorkerServicesService } from '../workers/worker-services.service';
+import { BOOKING_NOTIFIER, BookingNotifier } from './notifications/booking-notifier.interface';
+import { Booking, BookingDocument } from './schemas/booking.schema';
+import {
+  BookingOffer,
+  BookingOfferDocument,
+  BookingOfferOutcome,
+} from './schemas/booking-offer.schema';
+
+// A worker actively doing one of these jobs is unavailable for a NEW
+// instant job right now — PENDING_WORKER (a SCHEDULED request she hasn't
+// responded to yet) deliberately does NOT count: she hasn't committed to it.
+const BUSY_STATUSES = ['ACCEPTED', 'ON_THE_WAY', 'ARRIVED', 'IN_PROGRESS'];
+
+@Injectable()
+export class InstantMatchingService {
+  constructor(
+    @InjectModel(Booking.name) private readonly bookingModel: Model<BookingDocument>,
+    @InjectModel(BookingOffer.name) private readonly offerModel: Model<BookingOfferDocument>,
+    private readonly workerPresenceService: WorkerPresenceService,
+    private readonly workerServicesService: WorkerServicesService,
+    private readonly pricingService: PricingService,
+    private readonly countriesService: CountriesService,
+    @Inject(BOOKING_NOTIFIER) private readonly notifier: BookingNotifier,
+  ) {}
+
+  /** Called by BookingsService.createInstant right after persisting a new SEARCHING booking — kicks off wave 0. */
+  async startSearch(booking: BookingDocument): Promise<void> {
+    const now = new Date();
+    booking.instantMatching = {
+      searchStartedAt: now,
+      currentWaveIndex: 0,
+      currentWaveStartedAt: now,
+    };
+    await booking.save();
+    await this.broadcastWave(booking, 0);
+  }
+
+  /**
+   * Broadcasts (or re-broadcasts) one wave at `waveIndex`'s radius.
+   * Deduplicates against every offer already on record for this booking —
+   * a worker who saw an earlier wave is never re-notified, but a
+   * re-broadcast at the SAME radius (once the steps are exhausted) still
+   * picks up anyone newly eligible since the last tick (e.g. just went
+   * online). Public so InstantMatchingSweepService can call it directly
+   * for wave expansion.
+   */
+  async broadcastWave(booking: BookingDocument, waveIndex: number): Promise<void> {
+    const country = await this.countriesService.findActiveById(booking.countryId.toString());
+    const policy = country.instantMatchingPolicy;
+    const radiusMeters = policy.radiusStepsMeters[waveIndex];
+
+    const alreadyNotified = await this.offerModel
+      .distinct('workerProfileId', { bookingId: booking._id })
+      .exec();
+
+    const candidates = await this.workerPresenceService.findEligibleCandidates({
+      serviceId: booking.serviceId.toString(),
+      cityId: booking.cityId.toString(),
+      point: booking.address.point,
+      radiusMeters,
+      staleAfterSeconds: policy.heartbeatStalenessSeconds,
+      excludeWorkerProfileIds: alreadyNotified.map((id: Types.ObjectId) => id.toString()),
+    });
+    if (candidates.length === 0) {
+      return;
+    }
+
+    const busyWorkerIds = new Set(
+      (
+        await this.bookingModel
+          .distinct('workerProfileId', {
+            workerProfileId: { $in: candidates.map((c) => c.workerProfileId) },
+            status: { $in: BUSY_STATUSES },
+          })
+          .exec()
+      ).map((id: Types.ObjectId) => id.toString()),
+    );
+
+    for (const candidate of candidates) {
+      if (busyWorkerIds.has(candidate.workerProfileId)) {
+        continue;
+      }
+
+      const workerService = await this.workerServicesService.findActiveByWorkerAndService(
+        candidate.workerProfileId,
+        booking.serviceId.toString(),
+      );
+      const quote = await this.pricingService.quote(workerService.id as string, {
+        estimatedHours: booking.pendingQuoteParams?.estimatedHours ?? undefined,
+        roomCount: booking.pendingQuoteParams?.roomCount ?? undefined,
+      });
+
+      try {
+        await this.offerModel.create({
+          bookingId: booking._id,
+          workerProfileId: candidate.workerProfileId,
+          workerServiceId: workerService.id,
+          wave: waveIndex,
+          radiusMeters,
+          distanceMeters: candidate.distanceMeters,
+          estimatedPrice: quote.basePrice,
+          estimatedWorkerEarnings: quote.workerEarnings,
+          currency: quote.currency,
+          sentAt: new Date(),
+          outcome: BookingOfferOutcome.PENDING,
+        });
+      } catch (error) {
+        // Unique-index race: another sweep tick already offered her this
+        // booking between the distinct() above and this insert. Skip, don't fail the wave.
+        if ((error as { code?: number }).code === 11000) {
+          continue;
+        }
+        throw error;
+      }
+
+      await this.notifier.notifyOffer({
+        workerProfileId: candidate.workerProfileId,
+        bookingId: booking.id as string,
+        wave: waveIndex,
+        radiusMeters,
+      });
+    }
+  }
+
+  /** Customer cancelled while SEARCHING, or the booking was swept to NO_WORKER_FOUND — nothing outstanding should still look actionable to a worker. */
+  async markOutstandingOffersStale(bookingId: string): Promise<void> {
+    await this.offerModel
+      .updateMany(
+        { bookingId, outcome: BookingOfferOutcome.PENDING },
+        { outcome: BookingOfferOutcome.STALE, respondedAt: new Date() },
+      )
+      .exec();
+  }
+
+  /** Called once BookingsService.acceptOffer has atomically decided the winner. Never affects any worker's stats — see BookingOfferOutcome's doc comment. */
+  async resolveOffers(bookingId: string, winningWorkerProfileId: string): Promise<void> {
+    await this.offerModel
+      .updateOne(
+        { bookingId, workerProfileId: winningWorkerProfileId },
+        { outcome: BookingOfferOutcome.WON, respondedAt: new Date() },
+      )
+      .exec();
+    await this.offerModel
+      .updateMany(
+        {
+          bookingId,
+          workerProfileId: { $ne: winningWorkerProfileId },
+          outcome: BookingOfferOutcome.PENDING,
+        },
+        { outcome: BookingOfferOutcome.LOST, respondedAt: new Date() },
+      )
+      .exec();
+  }
+}

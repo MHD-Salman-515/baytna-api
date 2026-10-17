@@ -36,9 +36,10 @@ export interface BookingProjectionInput {
   id: string;
   bookingNumber: string;
   customerId: string;
-  workerProfileId: string;
+  // Null while an INSTANT booking is SEARCHING.
+  workerProfileId: string | null;
   serviceId: string;
-  workerServiceId: string;
+  workerServiceId: string | null;
   countryId: string;
   cityId: string;
   type: BookingType;
@@ -46,9 +47,11 @@ export interface BookingProjectionInput {
   scheduledFor: Date | null;
   estimatedDurationMinutes: number;
   address: ProjectionAddress;
-  pricing: ProjectionPricingSnapshot;
+  // Null while an INSTANT booking is SEARCHING — frozen once a worker is known.
+  pricing: ProjectionPricingSnapshot | null;
   finalPricing: ProjectionPricingSnapshot | null;
-  responseDeadline: Date;
+  // Null for INSTANT (uses instantMatching + the country policy instead).
+  responseDeadline: Date | null;
   acceptedAt: Date | null;
   startedAt: Date | null;
   completedAt: Date | null;
@@ -107,7 +110,7 @@ export function toBookingView(
     scheduledFor: input.scheduledFor,
     estimatedDurationMinutes: input.estimatedDurationMinutes,
     address,
-    pricing: projectPricing(input.pricing, viewer),
+    pricing: input.pricing ? projectPricing(input.pricing, viewer) : null,
     finalPricing: input.finalPricing ? projectPricing(input.finalPricing, viewer) : null,
     responseDeadline: input.responseDeadline,
     acceptedAt: input.acceptedAt,

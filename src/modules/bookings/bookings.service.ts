@@ -24,6 +24,7 @@ import { WorkerAvailabilityService } from '../workers/worker-availability.servic
 import { WorkerProfilesService } from '../workers/worker-profiles.service';
 import { WorkerServicesService } from '../workers/worker-services.service';
 import { DirectAssignmentStrategy } from './assignment/direct-assignment.strategy';
+import { NearestAvailableAssignmentStrategy } from './assignment/nearest-available-assignment.strategy';
 import { BookingProjectionInput, BookingViewer, toBookingView } from './booking-projection';
 import { BookingAction, assertValidAction } from './booking.state-machine';
 import { computeFinalPricing } from './compute-final-pricing';
@@ -32,6 +33,13 @@ import { CreateBookingDto } from './dto/create-booking.dto';
 import { FindBookingsQueryDto } from './dto/find-bookings-query.dto';
 import { ForceBookingStatusDto } from './dto/force-booking-status.dto';
 import { generateBookingNumber } from './generate-booking-number';
+import { InstantMatchingService } from './instant-matching.service';
+import { OfferProjectionInput, toOfferView } from './offer-projection';
+import {
+  BookingOffer,
+  BookingOfferDocument,
+  BookingOfferOutcome,
+} from './schemas/booking-offer.schema';
 import { Booking, BookingDocument, BookingPricingSnapshot } from './schemas/booking.schema';
 import { subtractBusyIntervals, TimeInterval } from './subtract-busy-intervals';
 
@@ -49,6 +57,7 @@ const MAX_BOOKING_NUMBER_ATTEMPTS = 5;
 export class BookingsService {
   constructor(
     @InjectModel(Booking.name) private readonly bookingModel: Model<BookingDocument>,
+    @InjectModel(BookingOffer.name) private readonly bookingOfferModel: Model<BookingOfferDocument>,
     private readonly workerServicesService: WorkerServicesService,
     private readonly workerProfilesService: WorkerProfilesService,
     private readonly workerAvailabilityService: WorkerAvailabilityService,
@@ -57,15 +66,31 @@ export class BookingsService {
     private readonly pricingService: PricingService,
     private readonly usersService: UsersService,
     private readonly auditLogService: AuditLogService,
-    // Typed to the interface, not the concrete class — see
+    private readonly instantMatchingService: InstantMatchingService,
+    // Both typed to the interface, not the concrete class — see
     // BookingAssignmentStrategy's own doc comment for the Phase 6 seam.
-    // SCHEDULED is the only creatable type in this phase, so there's only
-    // one implementation wired in; Phase 6 adds a sibling strategy for
-    // INSTANT and branches on dto.type here, without touching anything below.
-    private readonly assignmentStrategy: DirectAssignmentStrategy,
+    // create() selects between them by dto.type; nothing else here branches
+    // on booking type beyond createScheduled vs createInstant themselves.
+    private readonly directAssignmentStrategy: DirectAssignmentStrategy,
+    private readonly nearestAvailableAssignmentStrategy: NearestAvailableAssignmentStrategy,
   ) {}
 
   async create(customerId: string, dto: CreateBookingDto): Promise<BookingDocument> {
+    if (dto.type === BookingType.INSTANT) {
+      return this.createInstant(customerId, dto);
+    }
+    return this.createScheduled(customerId, dto);
+  }
+
+  private async createScheduled(
+    customerId: string,
+    dto: CreateBookingDto,
+  ): Promise<BookingDocument> {
+    if (!dto.workerServiceId || !dto.scheduledFor) {
+      throw new BadRequestException(
+        'workerServiceId and scheduledFor are required for a SCHEDULED booking',
+      );
+    }
     const workerService = await this.workerServicesService.findActiveById(dto.workerServiceId);
 
     // Same "don't reveal why" visibility gate PricingService uses — a
@@ -110,7 +135,7 @@ export class BookingsService {
       country.bookingPolicy.interBookingBufferMinutes,
     );
 
-    const assignment = await this.assignmentStrategy.resolveWorker({
+    const assignment = await this.directAssignmentStrategy.resolveWorker({
       workerProfileId: profile.id as string,
       workerServiceId: dto.workerServiceId,
       serviceId: service.id as string,
@@ -118,6 +143,11 @@ export class BookingsService {
       cityId: dto.cityId,
       scheduledFor,
     });
+    // DirectAssignmentStrategy always resolves synchronously — this is
+    // never null for SCHEDULED (NearestAvailableAssignmentStrategy is the
+    // one that defers). Asserted rather than re-typed, to keep
+    // AssignmentResult's nullability honest for the interface as a whole.
+    const workerProfileId = assignment.workerProfileId as string;
 
     // Never accept a price from the client — PricingService is the only
     // place this math happens, and the result is frozen into the booking.
@@ -155,7 +185,7 @@ export class BookingsService {
     return this.bookingModel.create({
       bookingNumber,
       customerId,
-      workerProfileId: assignment.workerProfileId,
+      workerProfileId,
       serviceId: service.id,
       workerServiceId: dto.workerServiceId,
       countryId: country.id,
@@ -170,6 +200,171 @@ export class BookingsService {
       responseDeadline,
       customerNote: dto.customerNote ?? null,
     });
+  }
+
+  private async createInstant(customerId: string, dto: CreateBookingDto): Promise<BookingDocument> {
+    if (!dto.serviceId) {
+      throw new BadRequestException('serviceId is required for an INSTANT booking');
+    }
+
+    // No specific worker to validate against yet — the customer picks a
+    // *service*, not a worker. Her own country (not a worker's) resolves
+    // which market's instantMatchingPolicy/currency applies.
+    const customer = await this.usersService.findById(customerId);
+    const service = await this.servicesService.findActiveById(dto.serviceId);
+    const country = await this.countriesService.findActiveById(customer.countryId.toString());
+
+    // Always resolves { workerProfileId: null } — called anyway so create()
+    // has exactly one call site per strategy regardless of booking type,
+    // per BookingAssignmentStrategy's own doc comment.
+    await this.nearestAvailableAssignmentStrategy.resolveWorker({
+      workerServiceId: '',
+      serviceId: dto.serviceId,
+      countryId: country.id as string,
+      cityId: dto.cityId,
+      scheduledFor: null,
+    });
+
+    const bookingNumber = await this.generateUniqueBookingNumber();
+
+    const booking = await this.bookingModel.create({
+      bookingNumber,
+      customerId,
+      workerProfileId: null,
+      serviceId: service.id,
+      workerServiceId: null,
+      countryId: country.id,
+      cityId: dto.cityId,
+      type: BookingType.INSTANT,
+      status: BookingStatus.SEARCHING,
+      scheduledFor: null,
+      estimatedDurationMinutes: dto.estimatedDurationMinutes,
+      address: dto.address,
+      pricing: null,
+      finalPricing: null,
+      pendingQuoteParams: {
+        estimatedHours: dto.estimatedHours ?? null,
+        roomCount: dto.roomCount ?? null,
+      },
+      responseDeadline: null,
+      customerNote: dto.customerNote ?? null,
+    });
+
+    await this.instantMatchingService.startSearch(booking);
+    return booking;
+  }
+
+  /**
+   * The atomic claim that makes INSTANT acceptance race-safe: a single
+   * findOneAndUpdate with `status: SEARCHING` (and `workerProfileId: null`)
+   * in the filter — never read-then-write. Exactly one concurrent caller's
+   * update actually matches the document; every other caller's update
+   * matches zero documents and gets a neutral 409 that never implies she
+   * did anything wrong, and is never recorded as a rejection anywhere.
+   */
+  async acceptOffer(workerProfileId: string, bookingId: string): Promise<BookingDocument> {
+    this.assertValidId(bookingId);
+
+    const booking = await this.bookingModel
+      .findOneAndUpdate(
+        { _id: bookingId, status: BookingStatus.SEARCHING, workerProfileId: null },
+        { status: BookingStatus.ACCEPTED, workerProfileId, acceptedAt: new Date() },
+        { new: true },
+      )
+      .exec();
+
+    if (!booking) {
+      throw new ConflictException('This request was accepted by another provider');
+    }
+
+    // Only now is it known which of her offerings applies (different
+    // workers offering the same service may price it differently, or even
+    // use a different pricingType) — resolve and freeze fresh, exactly the
+    // same quote() call createScheduled uses, never a value trusted from
+    // the offer preview sent during the broadcast.
+    const workerService = await this.workerServicesService.findActiveByWorkerAndService(
+      workerProfileId,
+      booking.serviceId.toString(),
+    );
+    booking.workerServiceId = workerService._id;
+
+    const quote = await this.pricingService.quote(workerService.id as string, {
+      estimatedHours: booking.pendingQuoteParams?.estimatedHours ?? undefined,
+      roomCount: booking.pendingQuoteParams?.roomCount ?? undefined,
+    });
+
+    booking.pricing = {
+      pricingType: quote.breakdown.pricingType,
+      hours: quote.breakdown.hours ?? null,
+      roomCount: quote.breakdown.roomCount ?? null,
+      basePrice: quote.basePrice,
+      commissionRate: quote.breakdown.commissionRateBasisPoints,
+      commissionAmount: quote.commissionAmount,
+      workerEarnings: quote.workerEarnings,
+      currency: quote.currency,
+      hourlyRate:
+        quote.breakdown.pricingType === PricingType.HOURLY
+          ? (workerService.hourly?.rate ?? null)
+          : null,
+      minHours:
+        quote.breakdown.pricingType === PricingType.HOURLY
+          ? (workerService.hourly?.minHours ?? null)
+          : null,
+    };
+
+    await booking.save();
+    await this.instantMatchingService.resolveOffers(bookingId, workerProfileId);
+    return booking;
+  }
+
+  /** Backs GET /workers/me/offers — see toOfferView for exactly what she's allowed to see before accepting. */
+  async listPendingOffersForWorker(workerProfileId: string): Promise<Record<string, unknown>[]> {
+    const offers = await this.bookingOfferModel
+      .find({ workerProfileId, outcome: BookingOfferOutcome.PENDING })
+      .sort({ sentAt: -1 })
+      .exec();
+    if (offers.length === 0) {
+      return [];
+    }
+
+    const bookingIds = offers.map((o) => o.bookingId);
+    const bookings = await this.bookingModel
+      .find({ _id: { $in: bookingIds }, status: BookingStatus.SEARCHING })
+      .exec();
+    const bookingById = new Map(bookings.map((b) => [b.id as string, b]));
+
+    const views: Record<string, unknown>[] = [];
+    for (const offer of offers) {
+      const booking = bookingById.get(offer.bookingId.toString());
+      if (!booking) {
+        continue; // already resolved/expired by the time she's polling — not actionable
+      }
+
+      let serviceName: { ar?: string; en?: string } | null = null;
+      try {
+        const service = await this.servicesService.findActiveById(booking.serviceId.toString());
+        serviceName = { ar: service.name.ar, en: service.name.en };
+      } catch {
+        serviceName = null;
+      }
+
+      const input: OfferProjectionInput = {
+        id: offer.id as string,
+        bookingId: booking.id as string,
+        serviceId: booking.serviceId.toString(),
+        serviceName,
+        estimatedDurationMinutes: booking.estimatedDurationMinutes,
+        estimatedPrice: offer.estimatedPrice,
+        estimatedWorkerEarnings: offer.estimatedWorkerEarnings,
+        currency: offer.currency,
+        distanceMeters: offer.distanceMeters,
+        cityId: booking.cityId.toString(),
+        landmark: booking.address.landmark,
+        sentAt: offer.sentAt,
+      };
+      views.push(toOfferView(input));
+    }
+    return views;
   }
 
   async listOwnForCustomer(
@@ -261,7 +456,11 @@ export class BookingsService {
     booking.completedAt = new Date();
 
     const elapsedHours = (booking.completedAt.getTime() - booking.startedAt!.getTime()) / 3_600_000;
-    booking.finalPricing = computeFinalPricing(booking.pricing, elapsedHours);
+    // pricing is guaranteed set by the time a booking reaches IN_PROGRESS —
+    // SCHEDULED freezes it at creation, INSTANT at acceptance — so this is
+    // never actually null in practice, just not something TS can see from
+    // the schema's necessarily-nullable type.
+    booking.finalPricing = computeFinalPricing(booking.pricing!, elapsedHours);
 
     await booking.save();
     return booking;
@@ -273,10 +472,17 @@ export class BookingsService {
     reason: string,
   ): Promise<BookingDocument> {
     const booking = await this.getOwnForCustomer(customerId, bookingId);
+    const previousStatus = booking.status;
     booking.status = assertValidAction(booking.status, BookingAction.CUSTOMER_CANCEL, 'CUSTOMER');
 
-    const country = await this.countriesService.findActiveById(booking.countryId.toString());
-    const feeAmount = this.computeCustomerCancellationFee(booking, country.bookingPolicy);
+    // No worker was ever committed while SEARCHING (INSTANT) — no fee,
+    // regardless of the country's policy. Otherwise (SCHEDULED, or an
+    // INSTANT booking already matched to a worker) the usual policy applies.
+    let feeAmount = 0;
+    if (previousStatus !== BookingStatus.SEARCHING) {
+      const country = await this.countriesService.findActiveById(booking.countryId.toString());
+      feeAmount = this.computeCustomerCancellationFee(booking, country.bookingPolicy);
+    }
 
     booking.cancelledAt = new Date();
     booking.cancellation = {
@@ -286,6 +492,11 @@ export class BookingsService {
       feeAmount,
     };
     await booking.save();
+
+    if (previousStatus === BookingStatus.SEARCHING) {
+      await this.instantMatchingService.markOutstandingOffersStale(bookingId);
+    }
+
     return booking;
   }
 
@@ -361,7 +572,10 @@ export class BookingsService {
   }
 
   async projectForCustomer(booking: BookingDocument): Promise<Record<string, unknown>> {
-    const workerPhone = await this.getWorkerPhone(booking.workerProfileId.toString());
+    // No worker assigned yet (INSTANT, still SEARCHING) -> nothing to fetch.
+    const workerPhone = booking.workerProfileId
+      ? await this.getWorkerPhone(booking.workerProfileId.toString())
+      : null;
     return toBookingView(this.toProjectionInput(booking), 'CUSTOMER', {
       workerPhone,
       customerPhone: null,
@@ -378,7 +592,7 @@ export class BookingsService {
 
   async projectForAdmin(booking: BookingDocument): Promise<Record<string, unknown>> {
     const [workerPhone, customerPhone] = await Promise.all([
-      this.getWorkerPhone(booking.workerProfileId.toString()),
+      booking.workerProfileId ? this.getWorkerPhone(booking.workerProfileId.toString()) : null,
       this.getCustomerPhone(booking.customerId.toString()),
     ]);
     return toBookingView(this.toProjectionInput(booking), 'ADMIN', { workerPhone, customerPhone });
@@ -451,9 +665,9 @@ export class BookingsService {
       id: booking.id as string,
       bookingNumber: booking.bookingNumber,
       customerId: booking.customerId.toString(),
-      workerProfileId: booking.workerProfileId.toString(),
+      workerProfileId: booking.workerProfileId ? booking.workerProfileId.toString() : null,
       serviceId: booking.serviceId.toString(),
-      workerServiceId: booking.workerServiceId.toString(),
+      workerServiceId: booking.workerServiceId ? booking.workerServiceId.toString() : null,
       countryId: booking.countryId.toString(),
       cityId: booking.cityId.toString(),
       type: booking.type,
@@ -524,17 +738,23 @@ export class BookingsService {
   /**
    * "More than N hours before scheduledFor" is free; AT or inside that
    * window incurs the fee — the boundary itself belongs to the fee side,
-   * not the free side.
+   * not the free side. Only called once a worker is already committed (see
+   * cancelByCustomer), so `pricing` is guaranteed set. An INSTANT booking
+   * has no scheduledFor at all once matched — the job is either happening
+   * now or about to, so that case is treated the same as "inside the
+   * window" rather than "more than N hours away".
    */
   private computeCustomerCancellationFee(
     booking: BookingDocument,
     policy: CountryBookingPolicy,
   ): number {
-    const hoursUntil = (booking.scheduledFor!.getTime() - Date.now()) / 3_600_000;
-    if (hoursUntil > policy.freeCancellationHours) {
-      return 0;
+    if (booking.scheduledFor) {
+      const hoursUntil = (booking.scheduledFor.getTime() - Date.now()) / 3_600_000;
+      if (hoursUntil > policy.freeCancellationHours) {
+        return 0;
+      }
     }
-    return roundHalfUpDivide(booking.pricing.basePrice * policy.cancellationFeeBasisPoints, 10000);
+    return roundHalfUpDivide(booking.pricing!.basePrice * policy.cancellationFeeBasisPoints, 10000);
   }
 
   private async assertWithinAvailableWindow(
