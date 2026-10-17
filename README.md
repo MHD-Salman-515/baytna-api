@@ -1238,3 +1238,15 @@ distance (no rating-weighted or acceptance-rate-weighted ordering). `NO_WORKER_F
 for this phase — no automatic retry, no automatic fallback to a `SCHEDULED` request; the customer
 has to try again herself. No wallet integration — an INSTANT booking's `cancellation.feeAmount` is
 computed and persisted exactly like SCHEDULED's, not charged (still Phase 7).
+
+One known narrow race, found live and left as-is rather than papered over: the sweep's wave-claim
+atomically checks `status: SEARCHING` before bumping the wave index, but `broadcastWave` itself
+(the geo query, the eligibility checks, a price quote, and an insert *per candidate*) takes real
+wall-clock time — long enough that a booking can be accepted by an earlier wave's candidate while a
+later wave is still being broadcast. The offer that lands after acceptance stays `PENDING` forever
+instead of being swept to `STALE` (nothing currently revisits a `BookingOffer` once its wave
+finishes). This never affects correctness where it matters: `acceptOffer`'s atomic claim still
+guarantees exactly one winner, and `listPendingOffersForWorker` only ever returns offers whose
+booking is still `SEARCHING` — so a worker never actually sees the stale offer in her list. It's
+purely a gap in the operational bookkeeping (`BookingOffer.outcome` as "measure match quality"
+data), worth fixing with a reconciliation sweep before that data is relied on for anything real.
