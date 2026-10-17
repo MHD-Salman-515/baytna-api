@@ -224,4 +224,33 @@ describe('toBookingView', () => {
       feeAmount: 1200,
     });
   });
+
+  describe('an INSTANT booking still SEARCHING (no worker/workerService/pricing yet)', () => {
+    function searchingBooking(overrides: Partial<BookingProjectionInput> = {}) {
+      return booking({
+        type: BookingType.INSTANT,
+        status: BookingStatus.SEARCHING,
+        workerProfileId: null,
+        workerServiceId: null,
+        pricing: null,
+        scheduledFor: null,
+        responseDeadline: null,
+        acceptedAt: null,
+        ...overrides,
+      });
+    }
+
+    it('passes null through for the customer, rather than throwing', () => {
+      const view = toBookingView(searchingBooking(), 'CUSTOMER', phones);
+      expect(view.workerProfileId).toBeNull();
+      expect(view.pricing).toBeNull();
+      expect(view.workerPhone).toBeNull(); // nothing to reveal — acceptedAt is still null too
+    });
+
+    it('passes null through for admin too, rather than throwing', () => {
+      const view = toBookingView(searchingBooking(), 'ADMIN', phones);
+      expect(view.workerProfileId).toBeNull();
+      expect(view.pricing).toBeNull();
+    });
+  });
 });
