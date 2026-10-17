@@ -6,11 +6,12 @@ booking goes through trip-like stages and the worker swipes to finish it. Multi-
 from day one: nothing about currency, phone prefixes, or locale is hardcoded — it all comes from
 the `countries` collection, and every user/worker/booking references a `countryId`/`cityId`.
 
-**Phases 1–5** (this codebase): global app setup and `countries`/`cities` reference data;
+**Phases 1–6** (this codebase): global app setup and `countries`/`cities` reference data;
 phone-OTP authentication (no passwords); worker profiles with document verification; a service
-catalog with admin-defined price ranges and per-worker pricing; and the booking lifecycle itself —
+catalog with admin-defined price ranges and per-worker pricing; the booking lifecycle itself —
 a customer books an approved worker for a `SCHEDULED` slot, the worker accepts and moves through
-the trip, and completion recomputes the final price. See "Roadmap" below for what's left.
+the trip, and completion recomputes the final price; and INSTANT bookings, matched by broadcasting
+to nearby online workers rather than picking one directly. See "Roadmap" below for what's left.
 
 ## Tech stack
 
@@ -658,6 +659,178 @@ arithmetic), and `booking-expiry.service.spec.ts` (idempotent, safe under a simu
 claim). See "Phase 5 — what shipped, and what didn't" under "Roadmap" below for what's deliberately
 deferred.
 
+## Instant bookings and broadcast matching (Phase 6)
+
+`POST /bookings` with `type: INSTANT` skips the worker picker entirely — the customer names a
+*service*, not a worker, and the job starts now (no `scheduledFor`). Finding a worker is a
+broadcast: the request goes out to every eligible worker inside the current radius at once: first
+to accept wins, everyone else gets a neutral "already taken". If nobody accepts in time, the radius
+expands and it broadcasts again, up to a total time budget.
+
+### Worker presence — a new concept
+
+`WorkerProfile.isAvailable` is a stated intent ("I'm open for work in general"); it was never
+enough on its own to receive a live broadcast. `WorkerPresence` (one document per worker) tracks
+what actually matters right now:
+
+- `isOnline` — she opened the app and explicitly went online.
+- `lastLocation` — a GeoJSON Point, `2dsphere`-indexed.
+- `lastHeartbeatAt` — last time her location was refreshed.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/v1/workers/me/presence` | her own current presence |
+| POST | `/api/v1/workers/me/presence/online` | `{ location }` — sets `isOnline: true` + a fresh heartbeat |
+| POST | `/api/v1/workers/me/presence/offline` | immediate — `isOnline: false` right away, dropping her out of the next broadcast wave with no further action needed |
+| POST | `/api/v1/workers/me/presence/heartbeat` | `{ location }` — refreshes location + `lastHeartbeatAt`; rejected if she never went online |
+
+A worker is **eligible** for one broadcast wave only when every one of these holds: `APPROVED`,
+`isAvailable`, `isOnline`, `lastHeartbeatAt` within `instantMatchingPolicy.heartbeatStalenessSeconds`,
+she has an active offering for the requested service, the requested city is one of her
+`serviceAreas`, she's within the wave's radius of the job's location, and she has no other booking
+in `ACCEPTED`/`ON_THE_WAY`/`ARRIVED`/`IN_PROGRESS` right now (a `PENDING_WORKER` SCHEDULED request
+she hasn't responded to yet does **not** count as busy — she hasn't committed to it).
+`WorkerPresenceService.findEligibleCandidates` runs the `$geoNear` + online/heartbeat/exclude-list
+query and intersects it with her profile/offering eligibility; `InstantMatchingService` applies the
+busy-booking filter on top (the presence module has no access to the Booking model, to avoid a
+circular import back into `bookings`).
+
+### New statuses
+
+`SEARCHING` (a broadcast is in progress — INSTANT's starting status, taking the place of
+`PENDING_WORKER`) and `NO_WORKER_FOUND` (terminal — nobody accepted before the total timeout).
+Added to the same explicit transition table as Phase 5, with two new actions:
+`ACCEPT_OFFER` (`SEARCHING -> ACCEPTED`, worker) and `EXHAUST_SEARCH` (`SEARCHING ->
+NO_WORKER_FOUND`, system) — `CUSTOMER_CANCEL` now also accepts `SEARCHING`. Exhaustively
+re-verified across every `(action, status)` pair, same as Phase 5.
+
+### Why `workerProfileId`/`workerServiceId`/`pricing` had to become nullable
+
+An INSTANT booking is created with none of the three known — there's no worker yet, so there's no
+specific `WorkerService` to quote against, so there's no price to freeze. All three stay `null`
+until a worker actually wins (`BookingsService.acceptOffer`), at which point they're resolved and
+frozen exactly the way SCHEDULED does it at creation. `scheduledFor` and `responseDeadline` stay
+`null` for INSTANT entirely — there's no planned time, and the expiry sweep (which only ever
+queries `status: PENDING_WORKER`) never touches an INSTANT booking. From `ACCEPTED` onward an
+INSTANT booking is structurally identical to a SCHEDULED one — completion's HOURLY recompute
+(`compute-final-pricing.ts`) needed **zero** changes to support it.
+
+### The broadcast: waves, radius, and offers
+
+`Country.instantMatchingPolicy` (admin-editable, data-driven — not hardcoded):
+
+| Field | Default | Meaning |
+|---|---|---|
+| `radiusStepsMeters` | `[3000, 6000, 10000]` | progressive broadcast radii, nearest first |
+| `waveTimeoutSeconds` | `20` | how long one wave waits before expanding |
+| `totalRequestTimeoutSeconds` | `90` | total budget before `NO_WORKER_FOUND` |
+| `heartbeatStalenessSeconds` | `120` | max heartbeat age to stay eligible |
+
+`InstantMatchingService.startSearch` broadcasts wave 0 right after the booking is persisted.
+`broadcastWave` deduplicates against every `BookingOffer` already on record for that booking (one
+offer per worker per booking, enforced by a unique index) — a worker who saw an earlier wave is
+never re-notified, but once the radius steps are exhausted, later ticks keep re-broadcasting at the
+same max radius to catch anyone newly eligible since the last tick (just came online, etc.). Each
+`BookingOffer` records `bookingId`, `workerProfileId`, `workerServiceId`, `wave`, `radiusMeters`,
+`distanceMeters`, a price preview (`estimatedPrice`/`estimatedWorkerEarnings`/`currency`, computed
+fresh per candidate against *her own* offering), `sentAt`, and an `outcome`
+(`PENDING`/`WON`/`LOST`/`STALE`) — operational data for debugging and measuring match quality
+("workers complain they never get requests"). A `LOST` outcome is **never** treated as a rejection
+against her stats anywhere in this codebase — she lost a race for a job she never actually turned
+down.
+
+### Race safety: exactly one worker wins
+
+`BookingsService.acceptOffer` is a single atomic `findOneAndUpdate` with
+`{ status: SEARCHING, workerProfileId: null }` in the filter — never read-then-write. Exactly one
+concurrent caller's update matches the document; every other caller's update matches zero
+documents, and gets back a neutral `409 Conflict` — *"This request was accepted by another
+provider"* — that never implies she did anything wrong. Only the winner proceeds to resolve her own
+`WorkerService` for the booking's service, freeze pricing fresh via `PricingService.quote()` (never
+the offer's price preview — that was only ever a display estimate), and mark every offer resolved
+(`resolveOffers`: the winner's own offer `WON`, everyone else's still-`PENDING` offer `LOST`).
+Proven with a test that fires N concurrent `acceptOffer` calls at one booking and asserts exactly
+one resolves and the booking ends up with exactly one `workerProfileId`.
+
+### Timers: the matching sweep
+
+Same approach as Phase 5's expiry sweep — a periodic sweep via `@nestjs/schedule`'s
+`SchedulerRegistry` (`InstantMatchingSweepService`), not in-process `setTimeout` (dies with the
+process, doesn't coordinate across instances), claim-then-update throughout: expanding to the next
+wave re-checks the *old* `currentWaveIndex` in the same atomic update that bumps it, and the move to
+`NO_WORKER_FOUND` re-checks `status: SEARCHING` in the same update that changes it — so two sweep
+ticks (same instance or different instances) racing the same booking can't both apply.
+`BOOKING_INSTANT_SWEEP_ENABLED` / `BOOKING_INSTANT_SWEEP_INTERVAL_SECONDS` (default `5s` —
+deliberately more frequent than the expiry sweep's `300s`, since wave timeouts can be as short as
+~20s).
+
+### Pending offers and the pre-acceptance projection
+
+`GET /workers/me/offers` (polling, not push — see "Notifications" below) returns her own `PENDING`
+offers, each projected through `toOfferView`: service, its name, estimated duration, the price
+preview (both `estimatedPrice` and `estimatedWorkerEarnings`), currency, an **approximate**
+distance (rounded to the nearest 500m — never her precise geo-matched distance), the city, and the
+landmark. Same allowlist discipline as `toBookingView` — and the same restriction: **never** the
+customer's phone or exact address before she accepts. `POST /workers/me/offers/:bookingId/accept`
+calls `acceptOffer`.
+
+### Notifications: the Phase 8 seam
+
+Workers need to learn an offer exists. This phase deliberately does **not** build push
+notifications — `BookingNotifier` is an interface with one implementation, `LogNotifier`, which
+just logs what would have been sent. The whole broadcast flow is fully testable end to end right
+now via the polling endpoint above; Phase 8 swaps `LogNotifier` for a real push/websocket
+implementation behind the same interface (bound via the `BOOKING_NOTIFIER` DI token in
+`bookings.module.ts`) — nothing in `InstantMatchingService` changes when it does.
+
+### Cancellation during SEARCHING
+
+A customer may cancel while `SEARCHING` with **no fee** — no worker was ever committed — which
+immediately stops the broadcast (the sweep only ever acts on bookings still in `SEARCHING`) and
+marks every outstanding offer `STALE` so a worker who still has it open sees it's no longer
+actionable. If an INSTANT booking cancels *after* being matched (`ACCEPTED`+), it's treated as
+"inside the cancellation window" by default — there's no `scheduledFor` to measure against; the job
+is either happening now or about to.
+
+### Endpoints added in this phase
+
+| Method | Path | Auth | Notes |
+|---|---|---|---|
+| GET | `/api/v1/workers/me/presence` | WORKER + Approved | her own presence |
+| POST | `/api/v1/workers/me/presence/online` | WORKER + Approved | `{ location }` |
+| POST | `/api/v1/workers/me/presence/offline` | WORKER + Approved | immediate |
+| POST | `/api/v1/workers/me/presence/heartbeat` | WORKER + Approved | `{ location }` |
+| GET | `/api/v1/workers/me/offers` | WORKER + Approved | pending INSTANT offers |
+| POST | `/api/v1/workers/me/offers/:bookingId/accept` | WORKER + Approved | atomic claim |
+
+(`POST /bookings` and the rest of the booking lifecycle are unchanged routes — only `type: INSTANT`
+is new input to the existing endpoint.)
+
+### New environment variables
+
+| Var | Default | Notes |
+|---|---|---|
+| `BOOKING_INSTANT_SWEEP_ENABLED` | `true` | set `false` to disable the wave/timeout sweep on an instance |
+| `BOOKING_INSTANT_SWEEP_INTERVAL_SECONDS` | `5` | how often the sweep runs |
+
+(The radius steps, wave timeout, total timeout, and heartbeat staleness window are **not** env vars
+— they're per-country, data-driven fields on `Country.instantMatchingPolicy`, same reasoning as
+`bookingPolicy` in Phase 5.)
+
+### Tests
+
+`booking.state-machine.spec.ts` (the two new actions × every status), `bookings.service.spec.ts`
+(INSTANT creation, `acceptOffer` atomicity including the N-concurrent-callers test, `listPendingOffersForWorker`,
+no-fee SEARCHING cancellation), `instant-matching.service.spec.ts` (wave broadcast, busy-worker
+exclusion, dedup, the unique-index-race skip path), `instant-matching-sweep.service.spec.ts` (wave
+expansion, the total-timeout path taking precedence, idempotent under a simulated concurrent
+claim), `worker-presence.service.spec.ts` (the `$geoNear` query shape, eligibility intersection),
+`offer-projection.spec.ts` (allowlist leak-prevention), and `booking-projection.spec.ts` (nullable
+pricing/worker handled without throwing).
+
+claim). See "Phase 6 — what shipped, and what didn't" under "Roadmap" below for what's deliberately
+deferred.
+
 ## MongoDB options
 
 ### Option A: Atlas (no local install)
@@ -880,7 +1053,8 @@ curl -X POST http://localhost:3000/api/v1/countries/admin \
 
 Auth endpoints are listed under "Authentication" above; worker/admin/audit-log endpoints under
 "Worker verification" above; service catalog/pricing/quote endpoints under "Service catalog and
-pricing" above; booking/availability-window/slots endpoints under "Bookings" above. Countries/cities:
+pricing" above; booking/availability-window/slots endpoints under "Bookings" above;
+presence/offers endpoints under "Instant bookings and broadcast matching" above. Countries/cities:
 
 | Method | Path | Auth | Notes |
 |---|---|---|---|
@@ -920,16 +1094,22 @@ src/
     workers/     implemented — profile + document schemas, verification state machine,
                  required-document config, worker-service pricing (own validation layer),
                  worker availability windows (weekly + date overrides, timezone-correct),
-                 public projection (allowlist), upload rate limiter,
-                 worker-me/worker-services/worker-availability/workers-admin/public-workers controllers
+                 worker presence (isOnline/lastLocation/lastHeartbeatAt, 2dsphere) +
+                 eligibility bulk-filters for instant matching, public projection (allowlist),
+                 upload rate limiter, worker-me/worker-services/worker-availability/
+                 worker-presence/workers-admin/public-workers controllers
     pricing/     implemented — PricingService (the only place commission/rounding maths
                  lives), round-half-up-divide, customer-safe quote projection
-    bookings/    implemented — Booking schema (frozen pricing snapshot + finalPricing),
-                 explicit role-aware state machine, BookingsService (creation validation,
+    bookings/    implemented — Booking schema (nullable worker/pricing fields for INSTANT,
+                 frozen pricing snapshot + finalPricing once known), BookingOffer (per-wave
+                 offer records), explicit role-aware state machine (SCHEDULED + INSTANT
+                 statuses), BookingsService (creation for both types, atomic acceptOffer,
                  lifecycle transitions, cancellation fees, admin force-status),
-                 BookingAssignmentStrategy seam (DirectAssignmentStrategy for SCHEDULED),
-                 status-dependent projection (allowlist), expiry sweep (@nestjs/schedule),
-                 customer/worker/admin/slots controllers
+                 BookingAssignmentStrategy seam (Direct for SCHEDULED, NearestAvailable +
+                 InstantMatchingService for INSTANT), BookingNotifier/LogNotifier
+                 (Phase 8 push seam), status-dependent + offer projections (allowlist),
+                 expiry sweep + instant-matching sweep (@nestjs/schedule),
+                 customer/worker/admin/slots/offers controllers
     realtime/ locations/ reviews/ reports/ payments/
     notifications/ admin/          empty — later phases
 ```
@@ -958,10 +1138,10 @@ src/
 | 3 | Worker profiles and documents (national ID, criminal record — private/admin-only storage) | **Done** (this codebase) |
 | 4 | Service catalog and per-worker pricing (`HOURLY` / `BY_SIZE` / `FIXED`) | **Done** (this codebase) |
 | 5 | Bookings: `SCHEDULED` trip-like state machine, availability windows, expiry sweep | **Done** (this codebase) |
-| 6 | Instant matching (customer ↔ nearby available worker) | Planned |
-| 7 | Realtime location tracking during an active booking | Planned |
-| 8 | Reviews and safety (reports, moderation) | Planned |
-| 9 | Payments and admin dashboard | Planned |
+| 6 | Instant matching: broadcast with progressive radius expansion, worker presence | **Done** (this codebase) |
+| 7 | Wallet and payments (settling computed cancellation fees, worker earnings) | Planned |
+| 8 | Realtime push/websocket notifications (replacing `LogNotifier`) and live location tracking | Planned |
+| 9 | Reviews, safety (reports, moderation), and admin dashboard | Planned |
 
 ### Phase 2 — what shipped, and what didn't
 
@@ -1036,3 +1216,25 @@ slots endpoint returns raw free `{ start, end }` intervals rather than pre-discr
 `onTheWayAt` / `arrivedAt` timestamp fields — only the four the spec named
 (`acceptedAt`/`startedAt`/`completedAt`/`cancelledAt`) are persisted; a `REJECTED` booking's reason
 is still captured (`rejectionReason`), just without its own timestamp beyond `updatedAt`.
+
+### Phase 6 — what shipped, and what didn't
+
+Delivered: everything under "Instant bookings and broadcast matching" above — `POST /bookings` with
+`type: INSTANT`; `WorkerPresence` and the online/offline/heartbeat endpoints (going offline is
+immediate); the full eligibility rule (`APPROVED` + `isAvailable` + `isOnline` + fresh heartbeat +
+offers the service + city in `serviceAreas` + not already busy); `SEARCHING`/`NO_WORKER_FOUND`
+added to the exhaustively-tested state machine; progressive-radius broadcast waves with
+per-candidate price previews and operational `BookingOffer` records (deduplicated across waves);
+atomic, race-safe acceptance (`acceptOffer`'s single `findOneAndUpdate`, proven with a genuine
+N-concurrent-callers test — exactly one winner, exactly one `workerProfileId`, losers get a neutral
+409 never recorded against their stats); `GET /workers/me/offers` with the same
+never-leak-the-exact-address-or-phone discipline as the booking projection; the claim-then-update
+wave-expansion/timeout sweep; and no-fee cancellation during `SEARCHING`.
+
+Deliberately deferred: real push notifications — `BookingNotifier`/`LogNotifier` exist precisely so
+that's a Phase 8 provider swap, not a rewrite, and the whole flow is testable via polling today. No
+cap on offers per wave (every eligible candidate in radius gets one). No ranking signal beyond
+distance (no rating-weighted or acceptance-rate-weighted ordering). `NO_WORKER_FOUND` is a dead end
+for this phase — no automatic retry, no automatic fallback to a `SCHEDULED` request; the customer
+has to try again herself. No wallet integration — an INSTANT booking's `cancellation.feeAmount` is
+computed and persisted exactly like SCHEDULED's, not charged (still Phase 7).
