@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
+import { Model } from 'mongoose';
 import { GeoPoint } from '../cities/schemas/city.schema';
 import { WorkerProfilesService } from './worker-profiles.service';
 import { WorkerServicesService } from './worker-services.service';
@@ -21,7 +21,9 @@ export interface FindEligibleCandidatesParams {
 }
 
 interface GeoNearResult {
-  workerProfileId: Types.ObjectId;
+  // Stored (and therefore returned) as a plain string, not an ObjectId —
+  // see the note on `exclude` in findEligibleCandidates.
+  workerProfileId: string;
   distanceMeters: number;
 }
 
@@ -80,9 +82,13 @@ export class WorkerPresenceService {
    */
   async findEligibleCandidates(params: FindEligibleCandidatesParams): Promise<EligibleCandidate[]> {
     const staleCutoff = new Date(Date.now() - params.staleAfterSeconds * 1000);
-    const exclude = params.excludeWorkerProfileIds
-      .filter((id) => Types.ObjectId.isValid(id))
-      .map((id) => new Types.ObjectId(id));
+    // Plain strings, not ObjectId instances: this path isn't cast by the
+    // schema (ids flow through this whole app as opaque strings — see
+    // InstantMatchingService's resolveOffers/markOutstandingOffersStale for
+    // the one place that bit us), so an ObjectId here would never
+    // BSON-equal the string-stored workerProfileId values and silently
+    // exclude nothing.
+    const exclude = params.excludeWorkerProfileIds;
 
     const geoResults = await this.presenceModel
       .aggregate<GeoNearResult>([

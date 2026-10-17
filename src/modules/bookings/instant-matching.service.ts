@@ -129,11 +129,19 @@ export class InstantMatchingService {
     }
   }
 
-  /** Customer cancelled while SEARCHING, or the booking was swept to NO_WORKER_FOUND — nothing outstanding should still look actionable to a worker. */
+  /**
+   * Customer cancelled while SEARCHING, or the booking was swept to
+   * NO_WORKER_FOUND — nothing outstanding should still look actionable to a
+   * worker. `bookingId` is cast explicitly: unlike `_id` filters (which
+   * Mongo/Mongoose always cast regardless of schema recognition),
+   * `BookingOffer.bookingId` is an ordinary field, and every offer's
+   * bookingId was written from `booking._id` (already an ObjectId) — a
+   * plain string filter here would silently match nothing.
+   */
   async markOutstandingOffersStale(bookingId: string): Promise<void> {
     await this.offerModel
       .updateMany(
-        { bookingId, outcome: BookingOfferOutcome.PENDING },
+        { bookingId: new Types.ObjectId(bookingId), outcome: BookingOfferOutcome.PENDING },
         { outcome: BookingOfferOutcome.STALE, respondedAt: new Date() },
       )
       .exec();
@@ -141,16 +149,17 @@ export class InstantMatchingService {
 
   /** Called once BookingsService.acceptOffer has atomically decided the winner. Never affects any worker's stats — see BookingOfferOutcome's doc comment. */
   async resolveOffers(bookingId: string, winningWorkerProfileId: string): Promise<void> {
+    const bookingObjectId = new Types.ObjectId(bookingId);
     await this.offerModel
       .updateOne(
-        { bookingId, workerProfileId: winningWorkerProfileId },
+        { bookingId: bookingObjectId, workerProfileId: winningWorkerProfileId },
         { outcome: BookingOfferOutcome.WON, respondedAt: new Date() },
       )
       .exec();
     await this.offerModel
       .updateMany(
         {
-          bookingId,
+          bookingId: bookingObjectId,
           workerProfileId: { $ne: winningWorkerProfileId },
           outcome: BookingOfferOutcome.PENDING,
         },

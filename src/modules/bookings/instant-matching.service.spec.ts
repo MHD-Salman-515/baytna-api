@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
+import { Types } from 'mongoose';
 import { PricingType } from '../../common/enums/pricing-type.enum';
 import { CountriesService } from '../countries/countries.service';
 import { PricingService } from '../pricing/pricing.service';
@@ -198,26 +199,28 @@ describe('InstantMatchingService', () => {
   });
 
   describe('markOutstandingOffersStale', () => {
-    it('flips every PENDING offer for the booking to STALE', async () => {
-      await service.markOutstandingOffersStale('booking-1');
+    it('flips every PENDING offer for the booking to STALE, casting bookingId to match how it was stored', async () => {
+      const bookingId = new Types.ObjectId().toString();
+      await service.markOutstandingOffersStale(bookingId);
       expect(offerModel.updateMany).toHaveBeenCalledWith(
-        { bookingId: 'booking-1', outcome: BookingOfferOutcome.PENDING },
+        { bookingId: new Types.ObjectId(bookingId), outcome: BookingOfferOutcome.PENDING },
         expect.objectContaining({ outcome: BookingOfferOutcome.STALE }),
       );
     });
   });
 
   describe('resolveOffers', () => {
-    it('marks the winner WON and every other still-PENDING offer LOST', async () => {
-      await service.resolveOffers('booking-1', 'worker-winner');
+    it('marks the winner WON and every other still-PENDING offer LOST, casting bookingId to match how it was stored', async () => {
+      const bookingId = new Types.ObjectId().toString();
+      await service.resolveOffers(bookingId, 'worker-winner');
 
       expect(offerModel.updateOne).toHaveBeenCalledWith(
-        { bookingId: 'booking-1', workerProfileId: 'worker-winner' },
+        { bookingId: new Types.ObjectId(bookingId), workerProfileId: 'worker-winner' },
         expect.objectContaining({ outcome: BookingOfferOutcome.WON }),
       );
       expect(offerModel.updateMany).toHaveBeenCalledWith(
         {
-          bookingId: 'booking-1',
+          bookingId: new Types.ObjectId(bookingId),
           workerProfileId: { $ne: 'worker-winner' },
           outcome: BookingOfferOutcome.PENDING,
         },
