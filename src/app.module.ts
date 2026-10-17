@@ -22,6 +22,7 @@ import { ServicesModule } from './modules/services/services.module';
 import { WorkersModule } from './modules/workers/workers.module';
 import { PricingModule } from './modules/pricing/pricing.module';
 import { BookingsModule } from './modules/bookings/bookings.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
 
 @Module({
   imports: [
@@ -74,6 +75,7 @@ import { BookingsModule } from './modules/bookings/bookings.module';
     WorkersModule,
     PricingModule,
     BookingsModule,
+    NotificationsModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

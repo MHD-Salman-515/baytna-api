@@ -4,7 +4,9 @@ import { Throttle } from '@nestjs/throttler';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Public } from '../../common/decorators/public.decorator';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
+import { DeviceTokensService } from '../notifications/device-tokens.service';
 import { AuthService } from './auth.service';
+import { LogoutDto } from './dto/logout.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { RequestOtpDto } from './dto/request-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
@@ -12,7 +14,10 @@ import { VerifyOtpDto } from './dto/verify-otp.dto';
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly deviceTokensService: DeviceTokensService,
+  ) {}
 
   @Public()
   // Stricter, IP-scoped limit on top of the global throttler — the 'otp'
@@ -46,8 +51,14 @@ export class AuthController {
   @Public()
   @Post('logout')
   @HttpCode(HttpStatus.NO_CONTENT)
-  async logout(@Body() dto: RefreshTokenDto): Promise<void> {
+  async logout(@Body() dto: LogoutDto): Promise<void> {
     await this.authService.logout(dto.refreshToken);
+    // Deactivation is keyed by the token value alone (see
+    // DeviceTokensService.deactivateToken) — no need to resolve "who" from
+    // the refresh token just to unregister this one device's push token.
+    if (dto.deviceToken) {
+      await this.deviceTokensService.deactivateToken(dto.deviceToken);
+    }
   }
 
   @ApiBearerAuth()

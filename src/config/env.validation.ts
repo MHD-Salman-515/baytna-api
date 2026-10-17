@@ -83,4 +83,40 @@ export const envValidationSchema = Joi.object({
   // How often the sweep runs, in seconds — deliberately more frequent than
   // the expiry sweep, since wave timeouts can be as short as ~20s.
   BOOKING_INSTANT_SWEEP_INTERVAL_SECONDS: Joi.number().integer().positive().default(5),
+
+  // How long before a SCHEDULED booking's scheduledFor the worker gets a reminder.
+  SCHEDULED_REMINDER_LEAD_MINUTES: Joi.number().integer().positive().default(60),
+  SCHEDULED_REMINDER_SWEEP_ENABLED: Joi.boolean().truthy('true').falsy('false').default(true),
+  SCHEDULED_REMINDER_SWEEP_INTERVAL_SECONDS: Joi.number().integer().positive().default(300),
+
+  // --- Notifications / realtime / tracking (Phase 7) ---
+  // 'log' (default) never touches Firebase and needs no credentials — safe
+  // for dev and the test suite. Only 'fcm' requires the three FCM_* vars below.
+  NOTIFICATION_PUSH_PROVIDER: Joi.string().valid('log', 'fcm').default('log'),
+  FCM_PROJECT_ID: Joi.string().when('NOTIFICATION_PUSH_PROVIDER', {
+    is: 'fcm',
+    then: Joi.required(),
+  }),
+  FCM_CLIENT_EMAIL: Joi.string().when('NOTIFICATION_PUSH_PROVIDER', {
+    is: 'fcm',
+    then: Joi.required(),
+  }),
+  FCM_PRIVATE_KEY: Joi.string().when('NOTIFICATION_PUSH_PROVIDER', {
+    is: 'fcm',
+    then: Joi.required(),
+  }),
+
+  // Wires the socket.io Redis adapter for horizontal scaling (reuses
+  // REDIS_URL from Phase 2). Off by default — a single dev instance doesn't
+  // need it, and it must never be required to boot.
+  WEBSOCKET_REDIS_ADAPTER_ENABLED: Joi.boolean().truthy('true').falsy('false').default(false),
+
+  // Minimum gap between accepted worker location updates for one booking.
+  LOCATION_UPDATE_MIN_INTERVAL_SECONDS: Joi.number().integer().positive().default(5),
+  // Bounded trail per booking — oldest points drop off once this cap is hit.
+  LOCATION_TRAIL_MAX_POINTS: Joi.number().integer().positive().default(200),
+  // How long a trail survives after its booking terminates, for dispute handling.
+  LOCATION_TRAIL_RETENTION_HOURS: Joi.number().integer().positive().default(24),
+  LOCATION_TRAIL_PURGE_SWEEP_ENABLED: Joi.boolean().truthy('true').falsy('false').default(true),
+  LOCATION_TRAIL_PURGE_SWEEP_INTERVAL_SECONDS: Joi.number().integer().positive().default(300),
 });
