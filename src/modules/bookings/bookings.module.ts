@@ -26,6 +26,7 @@ import { InstantMatchingSweepService } from './instant-matching-sweep.service';
 import { InstantMatchingService } from './instant-matching.service';
 import { BOOKING_NOTIFIER } from './notifications/booking-notifier.interface';
 import { createBookingNotifier } from './notifications/booking-notifier.factory';
+import { ScheduledReminderSweepService } from './scheduled-reminder-sweep.service';
 import { BookingOffer, BookingOfferSchema } from './schemas/booking-offer.schema';
 import { Booking, BookingSchema } from './schemas/booking.schema';
 import { WorkerBookingsController } from './worker-bookings.controller';
@@ -70,6 +71,7 @@ import { WorkerSlotsController } from './worker-slots.controller';
     InstantMatchingService,
     InstantMatchingSweepService,
     BookingExpiryService,
+    ScheduledReminderSweepService,
     {
       provide: BOOKING_NOTIFIER,
       // forwardRef is supported at runtime for factory `inject` entries (see
