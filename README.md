@@ -589,7 +589,7 @@ Data-driven per country (`Country.bookingPolicy`, admin-editable via `PUT /count
 - Worker cancels after accepting → **no fee charged to the customer**, but it's still recorded
   (`cancellation.byRole = WORKER`, `feeAmount: 0`) — feeds her reliability score in a later phase.
 - The fee is only ever computed and persisted on `booking.cancellation.feeAmount`. **No money
-  moves in this phase** — the wallet arrives in Phase 7.
+  moves in this phase** — the wallet arrives in Phase 8.
 
 ### Pricing snapshot, `finalPricing`, and why completion doesn't call `PricingService.recomputeFinal()`
 
@@ -774,12 +774,12 @@ landmark. Same allowlist discipline as `toBookingView` — and the same restrict
 customer's phone or exact address before she accepts. `POST /workers/me/offers/:bookingId/accept`
 calls `acceptOffer`.
 
-### Notifications: the Phase 8 seam
+### Notifications: the Phase 7 seam
 
 Workers need to learn an offer exists. This phase deliberately does **not** build push
 notifications — `BookingNotifier` is an interface with one implementation, `LogNotifier`, which
 just logs what would have been sent. The whole broadcast flow is fully testable end to end right
-now via the polling endpoint above; Phase 8 swaps `LogNotifier` for a real push/websocket
+now via the polling endpoint above; Phase 7 (see "Realtime" below) adds a real push/websocket
 implementation behind the same interface (bound via the `BOOKING_NOTIFIER` DI token in
 `bookings.module.ts`) — nothing in `InstantMatchingService` changes when it does.
 
@@ -830,6 +830,225 @@ pricing/worker handled without throwing).
 
 claim). See "Phase 6 — what shipped, and what didn't" under "Roadmap" below for what's deliberately
 deferred.
+
+## Realtime: push notifications, live tracking, and the WebSocket layer (Phase 7)
+
+### Three delivery layers, deliberately redundant
+
+Workers are on budget Android devices with aggressive background battery management — push can
+arrive minutes late or not at all. So there are three layers, and **polling never stops working**:
+
+1. **Push (FCM)** — reaches a closed app. Primary channel for "you have a new offer."
+2. **WebSocket** — authoritative while the app is open; faster than push, no battery-manager delay.
+3. **Polling** — every Phase 5/6 endpoint (`GET /workers/me/offers`, `GET /bookings/:id`, ...) still
+   works exactly as before. Every event in this phase is reconstructible from a plain HTTP fetch;
+   push and sockets only accelerate delivery, they are never the only source of truth. Turn off
+   push and sockets entirely (`NOTIFICATION_PUSH_PROVIDER` doesn't matter if nothing's listening,
+   and no client connects a socket) and the booking lifecycle is unaffected — same statuses, same
+   offers, same transitions, just discovered a little later by whoever's polling.
+
+### The notification pipeline: one seam, one shared pipeline
+
+`BookingNotifier` (the Phase 6 seam) is unchanged in shape — `notifyOffer`'s signature and its only
+call site (`InstantMatchingService`) are untouched — but now also exposes a generic `notify(event)`
+for every other event type. `BaseNotifier` holds the entire shared pipeline (mute-list check,
+quiet-hours check, localization, socket emission, push delivery, an append-only `NotificationLog`
+entry for every channel attempted on every event); `LogNotifier` and `FcmNotifier` differ only in
+how `sendPush` actually transmits. `createBookingNotifier` (a factory provider, not a class
+binding) constructs whichever one `NOTIFICATION_PUSH_PROVIDER` selects **by hand** — so
+`FcmNotifier`'s constructor, and any Firebase credential requirement, never runs unless that
+provider is explicitly `fcm`. `log` (the default, in dev and in the test suite) requires no
+Firebase setup at all.
+
+The full event catalogue (`NotificationEventType`):
+
+| Event | Recipient | Trigger |
+|---|---|---|
+| `BOOKING_ACCEPTED` | customer | worker/offer acceptance (`accept`, `acceptOffer`) |
+| `WORKER_ON_THE_WAY` | customer | `onTheWay` |
+| `WORKER_ARRIVED` | customer | `arrived` |
+| `JOB_STARTED` | customer | `start` |
+| `JOB_COMPLETED` | customer | `complete` |
+| `BOOKING_CANCELLED` | the other party | `cancelByCustomer`/`cancelByWorker`/admin `forceStatus` (CANCELLED) |
+| `NO_WORKER_FOUND` | customer | `InstantMatchingSweepService`'s total-timeout path |
+| `NEW_OFFER` | worker | every `InstantMatchingService.broadcastWave` candidate |
+| `OFFER_TAKEN` | every losing worker | `InstantMatchingService.resolveOffers` |
+| `SCHEDULED_REMINDER` | worker | `ScheduledReminderSweepService`, `reminderLeadMinutes` before `scheduledFor` |
+
+### FCM push: multi-device, locale, and dead tokens
+
+`DeviceToken` (one row per install, upserted **by token alone** — a reinstall or account switch
+just transfers ownership of that row): `userId`, `token`, `platform`, `appVersion`, `locale`,
+`lastSeenAt`, `isActive`.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/v1/users/me/device-tokens` | her own active tokens |
+| POST | `/api/v1/users/me/device-tokens` | register (upsert by token) |
+| POST | `/api/v1/users/me/device-tokens/refresh` | same operation, different client intent |
+| DELETE | `/api/v1/users/me/device-tokens` | `{ token }` — unregister |
+
+`POST /auth/logout` also accepts an optional `deviceToken` and deactivates it — a device that logs
+out stops receiving push for that account immediately, without waiting for FCM to tell us it's gone.
+
+Every active token for a user gets the push (multi-device). `FcmNotifier.sendPush` calls
+`admin.messaging().sendEachForMulticast`; a response of `messaging/invalid-registration-token` or
+`messaging/registration-token-not-registered` for a given token auto-deactivates it via
+`DeviceTokensService.deactivateToken` (never scoped by user — FCM telling us a token is dead is
+true regardless of whose it was) — a stale token fails once, then stops being retried forever. The
+Firebase Admin app itself is lazily initialized on the *first* send, not at boot, and only when
+`FcmNotifier` is actually constructed (i.e. `NOTIFICATION_PUSH_PROVIDER=fcm`).
+
+**Payload safety**: a push/socket payload is built from `NotificationCopy` — `title`, `body`
+(localized ar/en via hand-written templates per event type, chosen from `User.locale`), and a
+`data` field that is **always exactly** `{ type, bookingId }`. `BookingNotificationEvent.context`
+(the only input the templates render from) is deliberately shaped with no address, phone, document,
+or commission field to leak — there is nothing sensitive for a template to accidentally include,
+and `notification-localization.spec.ts` asserts this even when a caller tries to stuff one in.
+
+`User.locale` (`ar`/`en`, default `ar` — both current markets are Arabic-first) is the single
+source of truth for localization; `PATCH /api/v1/users/me/locale` lets a user change it.
+
+### Notification preferences and quiet hours
+
+`NotificationPreference` is created **lazily** — no row until she customizes something; everyone
+else gets the all-enabled defaults (`channels: { push: true, socket: true }`, `quietHours.enabled:
+false`).
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/v1/users/me/notification-preferences` | defaults if never customized |
+| PUT | `/api/v1/users/me/notification-preferences` | partial update, merged onto the current row |
+| GET | `/api/v1/admin/notification-logs` | ADMIN — every delivery attempt, for "workers never get requests" complaints |
+
+`mutedTypes` suppresses a type on **every** channel unconditionally — a user who's muted
+`SCHEDULED_REMINDER` never gets one, full stop. Quiet hours are different: they suppress only
+`SCHEDULED_REMINDER` (the one type in `isUrgentNotificationType`'s complement) and **never**
+anything about an active booking — `BOOKING_ACCEPTED`/`WORKER_ON_THE_WAY`/.../`OFFER_TAKEN` always
+go through regardless of the hour. The window itself is evaluated in the recipient's **country**
+timezone (`isWithinQuietHours`, same `luxon` discipline as worker availability windows in Phase 5),
+not server local time, and correctly handles an overnight window (e.g. `22:00`–`07:00`).
+
+Every suppressed or failed attempt still gets a `NotificationLog` row (`outcome: SUPPRESSED` or
+`FAILED`) — a muted/quiet-hours gap in delivery is visible in the log, not silent.
+
+### WebSocket layer
+
+`RealtimeGateway` authenticates a connecting socket with the **same** JWT verification
+`JwtAuthGuard` uses (`jwtAccessSecret`, Bearer token from `handshake.auth.token` or an
+`Authorization` header) — an unauthenticated socket is disconnected immediately, never left open.
+Every authenticated socket auto-joins a per-user room (`user:<userId>`); a booking's room
+(`booking:<bookingId>`) is joined only via `booking:join`, which re-checks
+`BookingsService.isPartyToBooking` **on every join**, not just once at connection time — a customer
+or worker may only ever join rooms for bookings they're actually a party to (tested explicitly:
+joining someone else's user room isn't possible at all since rooms are server-assigned, and joining
+an unrelated booking's room is rejected). **A socket connecting, by itself, changes nothing about
+Phase 6 matching eligibility** — that's still `WorkerPresence` + explicit `online`/`heartbeat` calls.
+
+Socket event catalogue:
+
+| Direction | Event | Payload | Notes |
+|---|---|---|---|
+| C→S | `booking:join` | `{ bookingId }` | re-checked per join |
+| C→S | `booking:leave` | `{ bookingId }` | |
+| C→S | `location:update` | `{ bookingId, point }` | worker only — see "Live tracking" |
+| S→C | `booking:statusChanged` | `{ bookingId, title, body, data }` | recipient's **user** room; ACCEPTED/ON_THE_WAY/ARRIVED/STARTED/NO_WORKER_FOUND |
+| S→C | `booking:completed` | ″ | user room |
+| S→C | `booking:cancelled` | ″ | user room |
+| S→C | `booking:reminder` | ″ | user room |
+| S→C | `offer:new` | ″ | the worker's user room |
+| S→C | `offer:taken` | ″ | the losing worker's user room |
+| S→C | `location:update` | `{ bookingId, point, recordedAt }` | the **booking's** room (both parties) |
+
+Rate limiting, two layers: `RealtimeGateway` keeps an in-process, per-connection,
+per-message-type timestamp map (cleared on disconnect) that rejects a flood **before** it ever
+reaches the database — cheap, but only correct for a single instance/connection. On top of that,
+`LocationTrackingService.recordPoint`'s own throttle (see below) is the authoritative, state-based
+check, correct across reconnects and multiple instances. Both read the same
+`LOCATION_UPDATE_MIN_INTERVAL_SECONDS`.
+
+**Horizontal scaling**: with more than one instance behind a load balancer, a `server.to(room).emit()`
+issued on instance A never reaches a socket connected to instance B — by default, socket.io's
+adapter is purely in-memory per process. `RedisIoAdapter` (wired in `main.ts`, behind
+`WEBSOCKET_REDIS_ADAPTER_ENABLED`, reusing the same `REDIS_URL` `RedisOtpStore` uses) attaches
+`@socket.io/redis-adapter` so every emit fans out across instances via Redis pub/sub. **Off by
+default and not required in development** — a single instance works fine with socket.io's built-in
+in-memory adapter.
+
+### Live tracking
+
+A worker's position is tracked **only** while her booking is `ON_THE_WAY`, `ARRIVED`, or
+`IN_PROGRESS` — enforced structurally in `LocationTrackingService.recordPoint` (it re-reads the
+real booking document and checks `status` there), not left as a client-side convention. Every other
+status rejects the point with `reason: 'not_active'` — tested for all nine other statuses. A point
+is also rejected if it arrives before `LOCATION_UPDATE_MIN_INTERVAL_SECONDS` has elapsed since the
+last accepted one for that booking.
+
+`BookingLocationTrail` — one document per booking, created lazily on the first accepted point.
+`points` is capped at `LOCATION_TRAIL_MAX_POINTS` via `$push`+`$slice`, so it's always downsampled
+to the most recent points, never an unbounded history of a long job. On every terminal transition
+(`complete`, `cancelByCustomer`, `cancelByWorker`, admin `forceStatus`), `markTerminated` sets
+`terminatedAt`; `LocationTrailPurgeSweepService` (same `SchedulerRegistry` sweep pattern as every
+other sweep in this codebase) deletes a trail once `LOCATION_TRAIL_RETENTION_HOURS` has passed since
+then — long enough to investigate a no-show dispute shortly after the booking ends, never kept
+indefinitely.
+
+| Method | Path | Auth | Notes |
+|---|---|---|---|
+| GET | `/api/v1/bookings/:id/location` | CUSTOMER | her own booking only (`getOwnForCustomer`'s existing ownership check) — current position + a rough ETA |
+
+The ETA is deliberately simple: haversine distance from the worker's last reported point to
+`booking.address.point`, divided by an assumed ~30 km/h. It's meant to say "about 10 minutes," not
+to be a routing engine. At the `ON_THE_WAY → ARRIVED` transition, `BookingsService.arrived` records
+the haversine distance between her last reported point and the booking address
+(`arrivalDistanceMeters`, on the trail document) — evidence for a later no-show dispute, computed
+once and never recomputed on subsequent points.
+
+### New environment variables
+
+| Var | Default | Notes |
+|---|---|---|
+| `NOTIFICATION_PUSH_PROVIDER` | `log` | `log` or `fcm` — `log` requires no Firebase credentials |
+| `FCM_PROJECT_ID` / `FCM_CLIENT_EMAIL` / `FCM_PRIVATE_KEY` | — | required only when `NOTIFICATION_PUSH_PROVIDER=fcm` (Joi conditional); a service-account private key, with literal `\n` restored to real newlines |
+| `SCHEDULED_REMINDER_LEAD_MINUTES` | `60` | how long before `scheduledFor` the reminder fires |
+| `SCHEDULED_REMINDER_SWEEP_ENABLED` | `true` | |
+| `SCHEDULED_REMINDER_SWEEP_INTERVAL_SECONDS` | `300` | |
+| `WEBSOCKET_REDIS_ADAPTER_ENABLED` | `false` | multi-instance fan-out — reuses `REDIS_URL` |
+| `LOCATION_UPDATE_MIN_INTERVAL_SECONDS` | `5` | per-booking location-update throttle |
+| `LOCATION_TRAIL_MAX_POINTS` | `200` | trail cap, enforced via `$slice` |
+| `LOCATION_TRAIL_RETENTION_HOURS` | `24` | how long a terminated trail survives before purge |
+| `LOCATION_TRAIL_PURGE_SWEEP_ENABLED` | `true` | |
+| `LOCATION_TRAIL_PURGE_SWEEP_INTERVAL_SECONDS` | `300` | |
+
+### Setting up real FCM (optional — `log` works out of the box)
+
+1. Firebase console → Project settings → Service accounts → Generate new private key → downloads a
+   JSON file with `project_id`, `client_email`, and `private_key`.
+2. Set `NOTIFICATION_PUSH_PROVIDER=fcm`, `FCM_PROJECT_ID`, `FCM_CLIENT_EMAIL`, and `FCM_PRIVATE_KEY`
+   (paste the PEM key with literal `\n` for newlines — `.env` files can't hold a real multi-line
+   value cleanly) in `.env`.
+3. That's it — `createBookingNotifier` picks `FcmNotifier` up from there; nothing else changes.
+   Leave `NOTIFICATION_PUSH_PROVIDER` unset (or `log`) for development and CI — the test suite never
+   touches Firebase.
+
+### Tests
+
+`log-notifier.spec.ts` (the full `BaseNotifier` pipeline: mute-list suppression, quiet-hours
+suppression for a reminder but never for an urgent type, per-channel suppression, successful
+socket+push delivery, no-active-tokens path, localization, `notifyOffer`'s
+workerProfileId→userId resolution), `fcm-notifier.spec.ts` (multicast payload shape, invalid-token
+deactivation vs. an ordinary transient failure, lazy app init), `booking-notifier.factory.spec.ts`
+(provider selection), `quiet-hours.spec.ts` (overnight/same-day/zero-length windows, explicit
+not-server-local-time), `notification-localization.spec.ts` (ar/en selection, leak-prevention,
+every event type in both locales), `device-tokens.service.spec.ts` (register/upsert/ownership
+transfer/deactivation), `notification-preferences.service.spec.ts`, `notification-log.service.spec.ts`,
+`realtime.gateway.spec.ts` (connection auth, per-join `isPartyToBooking` re-check including
+rejecting an unrelated booking, `location:update`'s own rejection/throttle paths),
+`location-tracking.service.spec.ts` (every disallowed status rejected, the allowed three accepted,
+the throttle window, trail capping via `$slice`, arrival-distance recording), `redis-io.adapter.spec.ts`
+(adapter attachment, pub/sub client lifecycle), `location-trail-purge-sweep.service.spec.ts`, and
+`scheduled-reminder-sweep.service.spec.ts` (claim-then-update, a losing claim sends nothing, a failed
+profile lookup for one booking doesn't break the rest).
 
 ## MongoDB options
 
@@ -1101,17 +1320,29 @@ src/
     pricing/     implemented — PricingService (the only place commission/rounding maths
                  lives), round-half-up-divide, customer-safe quote projection
     bookings/    implemented — Booking schema (nullable worker/pricing fields for INSTANT,
-                 frozen pricing snapshot + finalPricing once known), BookingOffer (per-wave
-                 offer records), explicit role-aware state machine (SCHEDULED + INSTANT
-                 statuses), BookingsService (creation for both types, atomic acceptOffer,
-                 lifecycle transitions, cancellation fees, admin force-status),
-                 BookingAssignmentStrategy seam (Direct for SCHEDULED, NearestAvailable +
-                 InstantMatchingService for INSTANT), BookingNotifier/LogNotifier
-                 (Phase 8 push seam), status-dependent + offer projections (allowlist),
-                 expiry sweep + instant-matching sweep (@nestjs/schedule),
-                 customer/worker/admin/slots/offers controllers
-    realtime/ locations/ reviews/ reports/ payments/
-    notifications/ admin/          empty — later phases
+                 frozen pricing snapshot + finalPricing once known, reminderSentAt),
+                 BookingOffer (per-wave offer records), BookingLocationTrail (capped,
+                 downsampled location points + arrival distance), explicit role-aware state
+                 machine (SCHEDULED + INSTANT statuses), BookingsService (creation for both
+                 types, atomic acceptOffer, lifecycle transitions + notification dispatch,
+                 cancellation fees, admin force-status), BookingAssignmentStrategy seam
+                 (Direct for SCHEDULED, NearestAvailable + InstantMatchingService for
+                 INSTANT), notifications/ (BookingNotifier, BaseNotifier/LogNotifier/
+                 FcmNotifier sharing one pipeline, the config-driven factory), LocationTrackingService
+                 + LocationTrailPurgeSweepService, ScheduledReminderSweepService,
+                 status-dependent + offer projections (allowlist), expiry/instant-matching/
+                 reminder/trail-purge sweeps (@nestjs/schedule), customer/worker/admin/
+                 slots/offers controllers (+ GET :id/location)
+    notifications/ implemented — DeviceToken (multi-device, upsert-by-token),
+                 NotificationPreference (lazy, mute-list + quiet hours), NotificationLog
+                 (append-only delivery record), the event catalogue + ar/en localization
+                 templates + quiet-hours window math, device-tokens/notification-preferences
+                 controllers, admin notification-log query endpoint
+    realtime/    implemented — RealtimeGateway (JWT-authenticated sockets, per-user +
+                 per-booking rooms, per-join isPartyToBooking re-check, location:update with
+                 its own per-connection throttle), RedisIoAdapter (multi-instance fan-out,
+                 behind a config flag)
+    reviews/ reports/ payments/   empty — later phases
 ```
 
 ## Domain conventions (apply to every future module)
@@ -1139,8 +1370,8 @@ src/
 | 4 | Service catalog and per-worker pricing (`HOURLY` / `BY_SIZE` / `FIXED`) | **Done** (this codebase) |
 | 5 | Bookings: `SCHEDULED` trip-like state machine, availability windows, expiry sweep | **Done** (this codebase) |
 | 6 | Instant matching: broadcast with progressive radius expansion, worker presence | **Done** (this codebase) |
-| 7 | Wallet and payments (settling computed cancellation fees, worker earnings) | Planned |
-| 8 | Realtime push/websocket notifications (replacing `LogNotifier`) and live location tracking | Planned |
+| 7 | Realtime: push notifications, live location tracking, and the WebSocket layer | **Done** (this codebase) |
+| 8 | Wallet and payments (settling computed cancellation fees, worker earnings) | Planned |
 | 9 | Reviews, safety (reports, moderation), and admin dashboard | Planned |
 
 ### Phase 2 — what shipped, and what didn't
@@ -1210,7 +1441,7 @@ Deliberately deferred, by this phase's own explicit scope: `INSTANT` bookings an
 logic — the `BookingType.INSTANT` enum value and the assignment-strategy seam exist precisely so
 Phase 6 adds a path instead of a migration, but `BookingsService.create` only ever sets
 `BookingType.SCHEDULED`. No money moves — `cancellation.feeAmount` is computed and persisted, not
-charged (Phase 7, the wallet). No bulk "update all countries' booking policy" endpoint. The public
+charged (Phase 8, the wallet). No bulk "update all countries' booking policy" endpoint. The public
 slots endpoint returns raw free `{ start, end }` intervals rather than pre-discretized picker slots
 (e.g. fixed 30-minute increments) — left to the client to chunk for now. No `rejectedAt` /
 `onTheWayAt` / `arrivedAt` timestamp fields — only the four the spec named
@@ -1232,12 +1463,13 @@ never-leak-the-exact-address-or-phone discipline as the booking projection; the 
 wave-expansion/timeout sweep; and no-fee cancellation during `SEARCHING`.
 
 Deliberately deferred: real push notifications — `BookingNotifier`/`LogNotifier` exist precisely so
-that's a Phase 8 provider swap, not a rewrite, and the whole flow is testable via polling today. No
-cap on offers per wave (every eligible candidate in radius gets one). No ranking signal beyond
-distance (no rating-weighted or acceptance-rate-weighted ordering). `NO_WORKER_FOUND` is a dead end
-for this phase — no automatic retry, no automatic fallback to a `SCHEDULED` request; the customer
-has to try again herself. No wallet integration — an INSTANT booking's `cancellation.feeAmount` is
-computed and persisted exactly like SCHEDULED's, not charged (still Phase 7).
+that's a Phase 7 provider swap, not a rewrite, and the whole flow is testable via polling today (see
+"Realtime" below for how that swap actually landed). No cap on offers per wave (every eligible
+candidate in radius gets one). No ranking signal beyond distance (no rating-weighted or
+acceptance-rate-weighted ordering). `NO_WORKER_FOUND` is a dead end for this phase — no automatic
+retry, no automatic fallback to a `SCHEDULED` request; the customer has to try again herself. No
+wallet integration — an INSTANT booking's `cancellation.feeAmount` is computed and persisted
+exactly like SCHEDULED's, not charged (still Phase 8).
 
 One known narrow race, found live and left as-is rather than papered over: the sweep's wave-claim
 atomically checks `status: SEARCHING` before bumping the wave index, but `broadcastWave` itself
@@ -1250,3 +1482,32 @@ guarantees exactly one winner, and `listPendingOffersForWorker` only ever return
 booking is still `SEARCHING` — so a worker never actually sees the stale offer in her list. It's
 purely a gap in the operational bookkeeping (`BookingOffer.outcome` as "measure match quality"
 data), worth fixing with a reconciliation sweep before that data is relied on for anything real.
+
+### Phase 7 — what shipped, and what didn't
+
+Delivered: everything under "Realtime" above — the full event catalogue wired into every real
+transition (not a demo subset); `FcmNotifier`/`LogNotifier` sharing one pipeline
+(`BaseNotifier`), selected by `NOTIFICATION_PUSH_PROVIDER` via a hand-constructing factory so
+Firebase credentials are never required in dev/test; multi-device push with auto-deactivation on an
+FCM invalid/unregistered response; `User.locale`-driven ar/en localization with a payload-safety
+guarantee (`data` is always exactly `{ type, bookingId }`); per-user notification preferences and
+country-timezone quiet hours that never suppress an active-booking event; `RealtimeGateway` with
+JWT-authenticated sockets and per-join (not just per-connection) `isPartyToBooking` authorization;
+structurally-gated live location tracking (`ON_THE_WAY`/`ARRIVED`/`IN_PROGRESS` only, enforced
+against the real booking document) with a bounded/downsampled trail, a short post-termination
+retention, a customer-facing position+ETA endpoint and socket event, and arrival-distance capture
+for disputes; two independent rate-limiting layers on `location:update`; and the socket.io Redis
+adapter for multi-instance fan-out, off by default.
+
+Deliberately deferred: the ETA is a flat assumed-speed estimate, not a routing engine — no road
+network, no traffic. No admin UI/endpoint for the notification log beyond the one paginated list
+(no aggregate "delivery rate by type" dashboard). `arrivalDistanceMeters` is recorded but nothing
+yet *acts* on it (e.g. auto-flagging a suspiciously large distance as a likely no-show) — that's a
+disputes/moderation-phase decision. No WebRTC/voice, no in-app chat — the WebSocket layer here is
+strictly notifications + location. `WorkerProfile` still has no display name of its own; the
+`workerDisplayName` in a `BOOKING_ACCEPTED` notification comes from `User.profile.firstName`, which
+is optional and may be blank for a worker who never filled it in (the template falls back to a
+generic "the worker"/"العاملة"). The per-connection socket rate limiter is in-process only — on a
+multi-instance deployment it limits each instance independently, not a connection's total rate
+across reconnects to a different instance (the authoritative, cross-instance-correct check for
+location updates specifically is still `LocationTrackingService`'s own database-backed throttle).
