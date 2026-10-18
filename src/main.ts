@@ -8,6 +8,7 @@ import helmet from 'helmet';
 import { applyDnsServersFromEnv } from './config/apply-dns-servers';
 import { preflightMongoDns } from './config/preflight-mongo-dns';
 import { AppModule } from './app.module';
+import { RedisIoAdapter } from './modules/realtime/redis-io.adapter';
 
 async function bootstrap(): Promise<void> {
   applyDnsServersFromEnv();
@@ -35,6 +36,23 @@ async function bootstrap(): Promise<void> {
       transformOptions: { enableImplicitConversion: true },
     }),
   );
+
+  // Not required in development — a single instance works fine with
+  // socket.io's default in-memory adapter. Only matters once there's more
+  // than one instance behind a load balancer (see RedisIoAdapter's own doc comment).
+  if (configService.get<boolean>('realtime.redisAdapterEnabled')) {
+    const redisUrl = configService.get<string>('redisUrl');
+    if (!redisUrl) {
+      throw new Error('WEBSOCKET_REDIS_ADAPTER_ENABLED=true requires REDIS_URL to be set');
+    }
+    const redisIoAdapter = new RedisIoAdapter(app);
+    redisIoAdapter.connectToRedis(redisUrl);
+    app.useWebSocketAdapter(redisIoAdapter);
+    Logger.log(
+      'Socket.IO Redis adapter enabled — realtime events now fan out across instances',
+      'Bootstrap',
+    );
+  }
 
   const swaggerConfig = new DocumentBuilder()
     .setTitle('Home Services Marketplace API')
