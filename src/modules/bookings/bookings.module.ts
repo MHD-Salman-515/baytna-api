@@ -1,11 +1,21 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import { AuditLogModule } from '../audit-log/audit-log.module';
 import { CountriesModule } from '../countries/countries.module';
+import { CountriesService } from '../countries/countries.service';
+import { NotificationsModule } from '../notifications/notifications.module';
+import { DeviceTokensService } from '../notifications/device-tokens.service';
+import { NotificationLogService } from '../notifications/notification-log.service';
+import { NotificationPreferencesService } from '../notifications/notification-preferences.service';
 import { PricingModule } from '../pricing/pricing.module';
+import { RealtimeModule } from '../realtime/realtime.module';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { ServicesModule } from '../services/services.module';
 import { UsersModule } from '../users/users.module';
+import { UsersService } from '../users/users.service';
 import { WorkersModule } from '../workers/workers.module';
+import { WorkerProfilesService } from '../workers/worker-profiles.service';
 import { AdminBookingsController } from './admin-bookings.controller';
 import { DirectAssignmentStrategy } from './assignment/direct-assignment.strategy';
 import { NearestAvailableAssignmentStrategy } from './assignment/nearest-available-assignment.strategy';
@@ -15,7 +25,7 @@ import { BookingsService } from './bookings.service';
 import { InstantMatchingSweepService } from './instant-matching-sweep.service';
 import { InstantMatchingService } from './instant-matching.service';
 import { BOOKING_NOTIFIER } from './notifications/booking-notifier.interface';
-import { LogNotifier } from './notifications/log-notifier';
+import { createBookingNotifier } from './notifications/booking-notifier.factory';
 import { BookingOffer, BookingOfferSchema } from './schemas/booking-offer.schema';
 import { Booking, BookingSchema } from './schemas/booking.schema';
 import { WorkerBookingsController } from './worker-bookings.controller';
@@ -34,6 +44,12 @@ import { WorkerSlotsController } from './worker-slots.controller';
     PricingModule,
     UsersModule,
     AuditLogModule,
+    NotificationsModule,
+    // RealtimeModule needs BookingsService (isPartyToBooking, for room-join
+    // authorization) and BookingsModule needs RealtimeGateway (for the
+    // BOOKING_NOTIFIER factory below) — a genuine mutual dependency, broken
+    // with forwardRef on both sides (see realtime.module.ts).
+    forwardRef(() => RealtimeModule),
   ],
   // WorkerBookingsController ('workers/me/bookings/...'), WorkerOffersController
   // ('workers/me/offers/...'), and WorkerSlotsController ('workers/:id/slots')
@@ -54,9 +70,23 @@ import { WorkerSlotsController } from './worker-slots.controller';
     InstantMatchingService,
     InstantMatchingSweepService,
     BookingExpiryService,
-    // LogNotifier (DEV ONLY) — Phase 8 swaps the useClass for a real
-    // push/websocket implementation of BookingNotifier; nothing else here changes.
-    { provide: BOOKING_NOTIFIER, useClass: LogNotifier },
+    {
+      provide: BOOKING_NOTIFIER,
+      // forwardRef is supported at runtime for factory `inject` entries (see
+      // @nestjs/core's injector), but its declared type only covers
+      // InjectionToken | OptionalFactoryDependency — hence the cast.
+      inject: [
+        NotificationPreferencesService,
+        NotificationLogService,
+        DeviceTokensService,
+        UsersService,
+        CountriesService,
+        WorkerProfilesService,
+        forwardRef(() => RealtimeGateway) as unknown as typeof RealtimeGateway,
+        ConfigService,
+      ],
+      useFactory: createBookingNotifier,
+    },
   ],
   exports: [BookingsService],
 })

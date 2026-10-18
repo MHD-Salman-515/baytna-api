@@ -1,16 +1,26 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { BookingNotifier, BookingOfferNotification } from './booking-notifier.interface';
+import { NotificationCopy } from '../../notifications/notification-localization';
+import { BaseNotifier } from './base-notifier';
+import { PushSendOutcome } from './push-send-outcome';
 
-/** DEV-ONLY stand-in for push/websockets — see BookingNotifier's own doc comment. */
+/** DEV/TEST DEFAULT — logs what would have been sent instead of calling a real push provider. No Firebase credentials required. */
 @Injectable()
-export class LogNotifier implements BookingNotifier {
+export class LogNotifier extends BaseNotifier {
   private readonly logger = new Logger(LogNotifier.name);
 
-  async notifyOffer(notification: BookingOfferNotification): Promise<void> {
-    this.logger.log(
-      `[LogNotifier (DEV ONLY)] Offer sent to worker ${notification.workerProfileId} for booking ` +
-        `${notification.bookingId} (wave ${notification.wave}, radius ${notification.radiusMeters}m) — ` +
-        'would push a real notification here in production',
-    );
+  protected async sendPush(tokens: string[], copy: NotificationCopy): Promise<PushSendOutcome[]> {
+    return tokens.map((token) => {
+      this.logger.log(
+        `[LogNotifier (DEV ONLY)] -> ...${token.slice(-6)}: "${copy.title}" — "${copy.body}" ` +
+          `data=${JSON.stringify(copy.data)}`,
+      );
+      return {
+        token,
+        success: true,
+        providerMessageId: null,
+        shouldDeactivate: false,
+        errorMessage: null,
+      };
+    });
   }
 }

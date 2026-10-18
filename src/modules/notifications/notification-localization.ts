@@ -100,6 +100,6 @@ export function buildNotificationCopy(
   event: BookingNotificationEvent,
   locale: string,
 ): NotificationCopy {
-  const resolvedLocale = locale === 'en' ? 'en' : 'ar'; // 'ar' is the project default — see DeviceToken.locale
+  const resolvedLocale = locale === 'en' ? 'en' : 'ar'; // 'ar' is the project default — see User.locale
   return TEMPLATES[event.type](resolvedLocale, event);
 }

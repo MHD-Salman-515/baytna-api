@@ -35,6 +35,13 @@ export class User extends BaseSchema {
 
   @Prop({ type: Date, default: null })
   lastLoginAt!: Date | null;
+
+  // Both markets this app currently serves (Syria, Iraq) are Arabic-first,
+  // so 'ar' is the sensible default everywhere today; updatable via
+  // PATCH /users/me/locale once a user actually prefers 'en'. This is the
+  // single source of truth notification localization reads from.
+  @Prop({ type: String, enum: ['ar', 'en'], default: 'ar' })
+  locale!: 'ar' | 'en';
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

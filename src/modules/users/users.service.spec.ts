@@ -135,6 +135,23 @@ describe('UsersService', () => {
     });
   });
 
+  describe('updateLocale', () => {
+    it("updates and saves the user's locale", async () => {
+      const existing = {
+        _id: validId,
+        phone,
+        locale: 'ar',
+        save: jest.fn().mockResolvedValue(undefined),
+      };
+      model.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(existing) });
+
+      const result = await service.updateLocale(validId, 'en');
+
+      expect(result.locale).toBe('en');
+      expect(existing.save).toHaveBeenCalled();
+    });
+  });
+
   describe('upsertAdmin', () => {
     it('creates a new ADMIN user when none exists', async () => {
       model.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(null) });

@@ -65,6 +65,13 @@ export class UsersService {
     await this.userModel.updateOne({ _id: userId }, { lastLoginAt: new Date() }).exec();
   }
 
+  async updateLocale(userId: string, locale: 'ar' | 'en'): Promise<UserDocument> {
+    const user = await this.findById(userId);
+    user.locale = locale;
+    await user.save();
+    return user;
+  }
+
   /** Idempotent: adds `role` if not already present. Never removes any existing role. */
   async addRole(userId: string, role: Role): Promise<UserDocument> {
     const user = await this.findById(userId);
