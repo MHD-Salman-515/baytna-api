@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { CountriesService } from '../../countries/countries.service';
 import { DeviceTokensService } from '../../notifications/device-tokens.service';
 import { NotificationLogService } from '../../notifications/notification-log.service';
@@ -48,8 +49,23 @@ export abstract class BaseNotifier implements BookingNotifier {
     private readonly usersService: UsersService,
     private readonly countriesService: CountriesService,
     private readonly workerProfilesService: WorkerProfilesService,
-    private readonly gateway: RealtimeGateway,
+    private readonly moduleRef: ModuleRef,
   ) {}
+
+  /**
+   * Resolved lazily, at request time, never at construction — RealtimeGateway
+   * lives in RealtimeModule, which imports BookingsModule (for
+   * isPartyToBooking/LocationTrackingService), so looking it up eagerly
+   * through a constructor-injected forwardRef here created a circular
+   * factory-provider dependency that resolved to null at runtime (caught
+   * live: InstantMatchingService's own `this.notifier` came back null).
+   * ModuleRef.get with strict:false searches the whole app container and
+   * carries no such cycle, and by the time any notify() call happens the
+   * module graph is always fully initialized.
+   */
+  private get gateway(): RealtimeGateway {
+    return this.moduleRef.get(RealtimeGateway, { strict: false });
+  }
 
   protected abstract sendPush(tokens: string[], copy: NotificationCopy): Promise<PushSendOutcome[]>;
 

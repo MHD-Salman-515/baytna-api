@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { ModuleRef } from '@nestjs/core';
 import * as admin from 'firebase-admin';
 import { AppConfig } from '../../../config/configuration';
 import { CountriesService } from '../../countries/countries.service';
@@ -7,7 +8,6 @@ import { DeviceTokensService } from '../../notifications/device-tokens.service';
 import { NotificationLogService } from '../../notifications/notification-log.service';
 import { NotificationCopy } from '../../notifications/notification-localization';
 import { NotificationPreferencesService } from '../../notifications/notification-preferences.service';
-import { RealtimeGateway } from '../../realtime/realtime.gateway';
 import { UsersService } from '../../users/users.service';
 import { WorkerProfilesService } from '../../workers/worker-profiles.service';
 import { BaseNotifier } from './base-notifier';
@@ -32,7 +32,7 @@ export class FcmNotifier extends BaseNotifier {
     usersService: UsersService,
     countriesService: CountriesService,
     workerProfilesService: WorkerProfilesService,
-    gateway: RealtimeGateway,
+    moduleRef: ModuleRef,
     private readonly configService: ConfigService,
   ) {
     super(
@@ -42,7 +42,7 @@ export class FcmNotifier extends BaseNotifier {
       usersService,
       countriesService,
       workerProfilesService,
-      gateway,
+      moduleRef,
     );
   }
 

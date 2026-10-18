@@ -7,7 +7,7 @@ import {
   NotificationChannel,
   NotificationOutcome,
 } from '../../notifications/schemas/notification-log.schema';
-import { RealtimeGateway } from '../../realtime/realtime.gateway';
+import { ModuleRef } from '@nestjs/core';
 import { UsersService } from '../../users/users.service';
 import { WorkerProfilesService } from '../../workers/worker-profiles.service';
 import { BookingNotificationEvent } from '../../notifications/notification-event';
@@ -53,6 +53,7 @@ describe('LogNotifier (BaseNotifier orchestration)', () => {
     countriesService = { findOne: jest.fn().mockResolvedValue({ timezone: 'Asia/Damascus' }) };
     workerProfilesService = { getForAdmin: jest.fn() };
     gateway = { emitToUser: jest.fn() };
+    const moduleRef = { get: jest.fn().mockReturnValue(gateway) };
 
     notifier = new LogNotifier(
       preferencesService as unknown as NotificationPreferencesService,
@@ -61,7 +62,7 @@ describe('LogNotifier (BaseNotifier orchestration)', () => {
       usersService as unknown as UsersService,
       countriesService as unknown as CountriesService,
       workerProfilesService as unknown as WorkerProfilesService,
-      gateway as unknown as RealtimeGateway,
+      moduleRef as unknown as ModuleRef,
     );
   });
 

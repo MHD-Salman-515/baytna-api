@@ -1,11 +1,11 @@
 import { ConfigService } from '@nestjs/config';
+import { ModuleRef } from '@nestjs/core';
 import { CountriesService } from '../../countries/countries.service';
 import { DeviceTokensService } from '../../notifications/device-tokens.service';
 import { NotificationLogService } from '../../notifications/notification-log.service';
 import { NotificationEventType } from '../../notifications/notification-event';
 import { NotificationPreferencesService } from '../../notifications/notification-preferences.service';
 import { NotificationOutcome } from '../../notifications/schemas/notification-log.schema';
-import { RealtimeGateway } from '../../realtime/realtime.gateway';
 import { UsersService } from '../../users/users.service';
 import { WorkerProfilesService } from '../../workers/worker-profiles.service';
 import { FcmNotifier } from './fcm-notifier';
@@ -50,6 +50,7 @@ describe('FcmNotifier', () => {
     const countriesService = { findOne: jest.fn() };
     const workerProfilesService = { getForAdmin: jest.fn() };
     const gateway = { emitToUser: jest.fn() };
+    const moduleRef = { get: jest.fn().mockReturnValue(gateway) };
     configService = {
       get: jest.fn().mockReturnValue({
         projectId: 'p',
@@ -65,7 +66,7 @@ describe('FcmNotifier', () => {
       usersService as unknown as UsersService,
       countriesService as unknown as CountriesService,
       workerProfilesService as unknown as WorkerProfilesService,
-      gateway as unknown as RealtimeGateway,
+      moduleRef as unknown as ModuleRef,
       configService as unknown as ConfigService,
     );
   });

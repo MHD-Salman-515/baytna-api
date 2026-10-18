@@ -1,4 +1,4 @@
-import { forwardRef, Inject, Logger } from '@nestjs/common';
+import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import {
@@ -52,9 +52,7 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
   constructor(
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
-    @Inject(forwardRef(() => BookingsService))
     private readonly bookingsService: BookingsService,
-    @Inject(forwardRef(() => LocationTrackingService))
     private readonly locationTrackingService: LocationTrackingService,
     private readonly workerProfilesService: WorkerProfilesService,
   ) {}

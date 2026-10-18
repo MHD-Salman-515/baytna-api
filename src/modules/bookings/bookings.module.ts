@@ -1,5 +1,6 @@
-import { forwardRef, Module } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { ModuleRef } from '@nestjs/core';
 import { MongooseModule } from '@nestjs/mongoose';
 import { AuditLogModule } from '../audit-log/audit-log.module';
 import { CountriesModule } from '../countries/countries.module';
@@ -9,8 +10,6 @@ import { DeviceTokensService } from '../notifications/device-tokens.service';
 import { NotificationLogService } from '../notifications/notification-log.service';
 import { NotificationPreferencesService } from '../notifications/notification-preferences.service';
 import { PricingModule } from '../pricing/pricing.module';
-import { RealtimeModule } from '../realtime/realtime.module';
-import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { ServicesModule } from '../services/services.module';
 import { UsersModule } from '../users/users.module';
 import { UsersService } from '../users/users.service';
@@ -53,11 +52,6 @@ import { WorkerSlotsController } from './worker-slots.controller';
     UsersModule,
     AuditLogModule,
     NotificationsModule,
-    // RealtimeModule needs BookingsService (isPartyToBooking, for room-join
-    // authorization) and BookingsModule needs RealtimeGateway (for the
-    // BOOKING_NOTIFIER factory below) — a genuine mutual dependency, broken
-    // with forwardRef on both sides (see realtime.module.ts).
-    forwardRef(() => RealtimeModule),
   ],
   // WorkerBookingsController ('workers/me/bookings/...'), WorkerOffersController
   // ('workers/me/offers/...'), and WorkerSlotsController ('workers/:id/slots')
@@ -83,9 +77,12 @@ import { WorkerSlotsController } from './worker-slots.controller';
     LocationTrailPurgeSweepService,
     {
       provide: BOOKING_NOTIFIER,
-      // forwardRef is supported at runtime for factory `inject` entries (see
-      // @nestjs/core's injector), but its declared type only covers
-      // InjectionToken | OptionalFactoryDependency — hence the cast.
+      // ModuleRef, not RealtimeGateway directly — RealtimeGateway lives in
+      // RealtimeModule, which imports BookingsModule (isPartyToBooking,
+      // LocationTrackingService); injecting it here even via forwardRef
+      // created a circular factory-provider dependency that resolved to
+      // null at runtime (BaseNotifier resolves it lazily instead — see its
+      // own comment on the `gateway` getter).
       inject: [
         NotificationPreferencesService,
         NotificationLogService,
@@ -93,7 +90,7 @@ import { WorkerSlotsController } from './worker-slots.controller';
         UsersService,
         CountriesService,
         WorkerProfilesService,
-        forwardRef(() => RealtimeGateway) as unknown as typeof RealtimeGateway,
+        ModuleRef,
         ConfigService,
       ],
       useFactory: createBookingNotifier,

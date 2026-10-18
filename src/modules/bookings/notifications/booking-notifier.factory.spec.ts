@@ -1,9 +1,9 @@
 import { ConfigService } from '@nestjs/config';
+import { ModuleRef } from '@nestjs/core';
 import { CountriesService } from '../../countries/countries.service';
 import { DeviceTokensService } from '../../notifications/device-tokens.service';
 import { NotificationLogService } from '../../notifications/notification-log.service';
 import { NotificationPreferencesService } from '../../notifications/notification-preferences.service';
-import { RealtimeGateway } from '../../realtime/realtime.gateway';
 import { UsersService } from '../../users/users.service';
 import { WorkerProfilesService } from '../../workers/worker-profiles.service';
 import { createBookingNotifier } from './booking-notifier.factory';
@@ -25,7 +25,7 @@ describe('createBookingNotifier', () => {
       {} as UsersService,
       {} as CountriesService,
       {} as WorkerProfilesService,
-      {} as RealtimeGateway,
+      {} as ModuleRef,
       configService as unknown as ConfigService,
     );
   }
