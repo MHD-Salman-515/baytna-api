@@ -3,8 +3,10 @@ import { getModelToken } from '@nestjs/mongoose';
 import { Types } from 'mongoose';
 import { PricingType } from '../../common/enums/pricing-type.enum';
 import { CountriesService } from '../countries/countries.service';
+import { NotificationEventType } from '../notifications/notification-event';
 import { PricingService } from '../pricing/pricing.service';
 import { WorkerPresenceService } from '../workers/worker-presence.service';
+import { WorkerProfilesService } from '../workers/worker-profiles.service';
 import { WorkerServicesService } from '../workers/worker-services.service';
 import { InstantMatchingService } from './instant-matching.service';
 import { BOOKING_NOTIFIER } from './notifications/booking-notifier.interface';
@@ -28,7 +30,8 @@ describe('InstantMatchingService', () => {
   let workerServicesService: { findActiveByWorkerAndService: jest.Mock };
   let pricingService: { quote: jest.Mock };
   let countriesService: { findActiveById: jest.Mock };
-  let notifier: { notifyOffer: jest.Mock };
+  let workerProfilesService: { getForAdmin: jest.Mock };
+  let notifier: { notifyOffer: jest.Mock; notify: jest.Mock };
 
   const country = {
     instantMatchingPolicy: {
@@ -75,7 +78,10 @@ describe('InstantMatchingService', () => {
       }),
     };
     countriesService = { findActiveById: jest.fn().mockResolvedValue(country) };
-    notifier = { notifyOffer: jest.fn().mockResolvedValue(undefined) };
+    workerProfilesService = {
+      getForAdmin: jest.fn().mockResolvedValue({ userId: { toString: () => 'worker-user-1' } }),
+    };
+    notifier = { notifyOffer: jest.fn().mockResolvedValue(undefined), notify: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -86,6 +92,7 @@ describe('InstantMatchingService', () => {
         { provide: WorkerServicesService, useValue: workerServicesService },
         { provide: PricingService, useValue: pricingService },
         { provide: CountriesService, useValue: countriesService },
+        { provide: WorkerProfilesService, useValue: workerProfilesService },
         { provide: BOOKING_NOTIFIER, useValue: notifier },
       ],
     }).compile();
@@ -226,6 +233,33 @@ describe('InstantMatchingService', () => {
         },
         expect.objectContaining({ outcome: BookingOfferOutcome.LOST }),
       );
+    });
+
+    it('notifies every losing worker OFFER_TAKEN, resolved via her WorkerProfile to a userId', async () => {
+      const bookingId = new Types.ObjectId().toString();
+      offerModel.distinct.mockReturnValue(chainableExec(['worker-loser-1', 'worker-loser-2']));
+
+      await service.resolveOffers(bookingId, 'worker-winner');
+
+      expect(workerProfilesService.getForAdmin).toHaveBeenCalledWith('worker-loser-1');
+      expect(workerProfilesService.getForAdmin).toHaveBeenCalledWith('worker-loser-2');
+      expect(notifier.notify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: NotificationEventType.OFFER_TAKEN,
+          recipientUserId: 'worker-user-1',
+          bookingId,
+        }),
+      );
+      expect(notifier.notify).toHaveBeenCalledTimes(2);
+    });
+
+    it('never lets a losing-worker lookup failure block the already-applied LOST update', async () => {
+      const bookingId = new Types.ObjectId().toString();
+      offerModel.distinct.mockReturnValue(chainableExec(['worker-loser-1']));
+      workerProfilesService.getForAdmin.mockRejectedValue(new Error('profile gone'));
+
+      await expect(service.resolveOffers(bookingId, 'worker-winner')).resolves.toBeUndefined();
+      expect(offerModel.updateMany).toHaveBeenCalled();
     });
   });
 });

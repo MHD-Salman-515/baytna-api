@@ -1,11 +1,13 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { SchedulerRegistry } from '@nestjs/schedule';
 import { Model } from 'mongoose';
 import { BookingStatus } from '../../common/enums/booking-status.enum';
 import { CountriesService } from '../countries/countries.service';
+import { NotificationEventType } from '../notifications/notification-event';
 import { InstantMatchingService } from './instant-matching.service';
+import { BOOKING_NOTIFIER, BookingNotifier } from './notifications/booking-notifier.interface';
 import { Booking, BookingDocument } from './schemas/booking.schema';
 
 const SWEEP_JOB_NAME = 'instant-matching-sweep';
@@ -31,6 +33,7 @@ export class InstantMatchingSweepService implements OnModuleInit, OnModuleDestro
     private readonly countriesService: CountriesService,
     private readonly configService: ConfigService,
     private readonly schedulerRegistry: SchedulerRegistry,
+    @Inject(BOOKING_NOTIFIER) private readonly notifier: BookingNotifier,
   ) {}
 
   onModuleInit(): void {
@@ -82,6 +85,12 @@ export class InstantMatchingSweepService implements OnModuleInit, OnModuleDestro
           .exec();
         if (claimed) {
           await this.instantMatchingService.markOutstandingOffersStale(booking.id as string);
+          await this.notifier.notify({
+            type: NotificationEventType.NO_WORKER_FOUND,
+            recipientUserId: booking.customerId.toString(),
+            bookingId: booking.id as string,
+            context: {},
+          });
           noWorkerFound++;
         }
         continue;

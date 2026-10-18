@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -16,6 +17,7 @@ import { AuditLogService } from '../audit-log/audit-log.service';
 import { AuditAction } from '../audit-log/schemas/audit-log.schema';
 import { CountriesService } from '../countries/countries.service';
 import { CountryBookingPolicy } from '../countries/schemas/country.schema';
+import { NotificationEventType } from '../notifications/notification-event';
 import { PricingService } from '../pricing/pricing.service';
 import { roundHalfUpDivide } from '../pricing/round-half-up-divide';
 import { ServicesService } from '../services/services.service';
@@ -34,6 +36,7 @@ import { FindBookingsQueryDto } from './dto/find-bookings-query.dto';
 import { ForceBookingStatusDto } from './dto/force-booking-status.dto';
 import { generateBookingNumber } from './generate-booking-number';
 import { InstantMatchingService } from './instant-matching.service';
+import { BOOKING_NOTIFIER, BookingNotifier } from './notifications/booking-notifier.interface';
 import { OfferProjectionInput, toOfferView } from './offer-projection';
 import {
   BookingOffer,
@@ -73,6 +76,7 @@ export class BookingsService {
     // on booking type beyond createScheduled vs createInstant themselves.
     private readonly directAssignmentStrategy: DirectAssignmentStrategy,
     private readonly nearestAvailableAssignmentStrategy: NearestAvailableAssignmentStrategy,
+    @Inject(BOOKING_NOTIFIER) private readonly notifier: BookingNotifier,
   ) {}
 
   async create(customerId: string, dto: CreateBookingDto): Promise<BookingDocument> {
@@ -314,6 +318,15 @@ export class BookingsService {
 
     await booking.save();
     await this.instantMatchingService.resolveOffers(bookingId, workerProfileId);
+
+    const identity = await this.resolveWorkerIdentity(workerProfileId);
+    await this.notifier.notify({
+      type: NotificationEventType.BOOKING_ACCEPTED,
+      recipientUserId: booking.customerId.toString(),
+      bookingId,
+      context: { workerDisplayName: identity.displayName },
+    });
+
     return booking;
   }
 
@@ -446,6 +459,15 @@ export class BookingsService {
     booking.status = assertValidAction(booking.status, BookingAction.ACCEPT, 'WORKER');
     booking.acceptedAt = new Date();
     await booking.save();
+
+    const identity = await this.resolveWorkerIdentity(workerProfileId);
+    await this.notifier.notify({
+      type: NotificationEventType.BOOKING_ACCEPTED,
+      recipientUserId: booking.customerId.toString(),
+      bookingId,
+      context: { workerDisplayName: identity.displayName },
+    });
+
     return booking;
   }
 
@@ -465,6 +487,14 @@ export class BookingsService {
     const booking = await this.getOwnForWorker(workerProfileId, bookingId);
     booking.status = assertValidAction(booking.status, BookingAction.ON_THE_WAY, 'WORKER');
     await booking.save();
+
+    await this.notifier.notify({
+      type: NotificationEventType.WORKER_ON_THE_WAY,
+      recipientUserId: booking.customerId.toString(),
+      bookingId,
+      context: {},
+    });
+
     return booking;
   }
 
@@ -472,6 +502,14 @@ export class BookingsService {
     const booking = await this.getOwnForWorker(workerProfileId, bookingId);
     booking.status = assertValidAction(booking.status, BookingAction.ARRIVED, 'WORKER');
     await booking.save();
+
+    await this.notifier.notify({
+      type: NotificationEventType.WORKER_ARRIVED,
+      recipientUserId: booking.customerId.toString(),
+      bookingId,
+      context: {},
+    });
+
     return booking;
   }
 
@@ -480,6 +518,14 @@ export class BookingsService {
     booking.status = assertValidAction(booking.status, BookingAction.START, 'WORKER');
     booking.startedAt = new Date();
     await booking.save();
+
+    await this.notifier.notify({
+      type: NotificationEventType.JOB_STARTED,
+      recipientUserId: booking.customerId.toString(),
+      bookingId,
+      context: {},
+    });
+
     return booking;
   }
 
@@ -497,6 +543,14 @@ export class BookingsService {
     booking.finalPricing = computeFinalPricing(booking.pricing!, elapsedHours);
 
     await booking.save();
+
+    await this.notifier.notify({
+      type: NotificationEventType.JOB_COMPLETED,
+      recipientUserId: booking.customerId.toString(),
+      bookingId,
+      context: {},
+    });
+
     return booking;
   }
 
@@ -529,6 +583,14 @@ export class BookingsService {
 
     if (previousStatus === BookingStatus.SEARCHING) {
       await this.instantMatchingService.markOutstandingOffersStale(bookingId);
+    } else if (booking.workerProfileId) {
+      const identity = await this.resolveWorkerIdentity(booking.workerProfileId.toString());
+      await this.notifier.notify({
+        type: NotificationEventType.BOOKING_CANCELLED,
+        recipientUserId: identity.userId,
+        bookingId,
+        context: { reason },
+      });
     }
 
     return booking;
@@ -552,6 +614,14 @@ export class BookingsService {
       feeAmount: 0,
     };
     await booking.save();
+
+    await this.notifier.notify({
+      type: NotificationEventType.BOOKING_CANCELLED,
+      recipientUserId: booking.customerId.toString(),
+      bookingId,
+      context: { reason },
+    });
+
     return booking;
   }
 
@@ -589,6 +659,24 @@ export class BookingsService {
       targetId: bookingId,
       metadata: { from: previousStatus, to: booking.status, reason: dto.reason },
     });
+
+    if (booking.status === BookingStatus.CANCELLED) {
+      await this.notifier.notify({
+        type: NotificationEventType.BOOKING_CANCELLED,
+        recipientUserId: booking.customerId.toString(),
+        bookingId,
+        context: { reason: dto.reason },
+      });
+      if (booking.workerProfileId) {
+        const identity = await this.resolveWorkerIdentity(booking.workerProfileId.toString());
+        await this.notifier.notify({
+          type: NotificationEventType.BOOKING_CANCELLED,
+          recipientUserId: identity.userId,
+          bookingId,
+          context: { reason: dto.reason },
+        });
+      }
+    }
 
     return booking;
   }
@@ -692,6 +780,16 @@ export class BookingsService {
     }));
 
     return subtractBusyIntervals(windows, busy);
+  }
+
+  /** One profile+user lookup, reused by every notify() call site that needs the worker's userId and/or a display name for the customer-facing copy. */
+  private async resolveWorkerIdentity(
+    workerProfileId: string,
+  ): Promise<{ userId: string; displayName?: string }> {
+    const profile = await this.workerProfilesService.getForAdmin(workerProfileId);
+    const userId = profile.userId.toString();
+    const user = await this.usersService.findById(userId);
+    return { userId, displayName: user.profile?.firstName };
   }
 
   private toProjectionInput(booking: BookingDocument): BookingProjectionInput {

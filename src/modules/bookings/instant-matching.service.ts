@@ -2,8 +2,10 @@ import { Inject, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { CountriesService } from '../countries/countries.service';
+import { NotificationEventType } from '../notifications/notification-event';
 import { PricingService } from '../pricing/pricing.service';
 import { WorkerPresenceService } from '../workers/worker-presence.service';
+import { WorkerProfilesService } from '../workers/worker-profiles.service';
 import { WorkerServicesService } from '../workers/worker-services.service';
 import { BOOKING_NOTIFIER, BookingNotifier } from './notifications/booking-notifier.interface';
 import { Booking, BookingDocument } from './schemas/booking.schema';
@@ -27,6 +29,7 @@ export class InstantMatchingService {
     private readonly workerServicesService: WorkerServicesService,
     private readonly pricingService: PricingService,
     private readonly countriesService: CountriesService,
+    private readonly workerProfilesService: WorkerProfilesService,
     @Inject(BOOKING_NOTIFIER) private readonly notifier: BookingNotifier,
   ) {}
 
@@ -156,15 +159,33 @@ export class InstantMatchingService {
         { outcome: BookingOfferOutcome.WON, respondedAt: new Date() },
       )
       .exec();
+
+    const losingFilter = {
+      bookingId: bookingObjectId,
+      workerProfileId: { $ne: winningWorkerProfileId },
+      outcome: BookingOfferOutcome.PENDING,
+    };
+    // Read who's about to lose BEFORE the update — notification is best-effort
+    // and must never block or fail the actual state change above it.
+    const losingOffers = await this.offerModel.distinct('workerProfileId', losingFilter).exec();
     await this.offerModel
-      .updateMany(
-        {
-          bookingId: bookingObjectId,
-          workerProfileId: { $ne: winningWorkerProfileId },
-          outcome: BookingOfferOutcome.PENDING,
-        },
-        { outcome: BookingOfferOutcome.LOST, respondedAt: new Date() },
-      )
+      .updateMany(losingFilter, { outcome: BookingOfferOutcome.LOST, respondedAt: new Date() })
       .exec();
+
+    for (const workerProfileId of losingOffers) {
+      try {
+        const profile = await this.workerProfilesService.getForAdmin(workerProfileId.toString());
+        await this.notifier.notify({
+          type: NotificationEventType.OFFER_TAKEN,
+          recipientUserId: profile.userId.toString(),
+          bookingId,
+          context: {},
+        });
+      } catch {
+        // A worker whose offer just lost no longer having a resolvable
+        // profile is not worth failing acceptance over — same best-effort
+        // spirit as every other notify() call site.
+      }
+    }
   }
 }

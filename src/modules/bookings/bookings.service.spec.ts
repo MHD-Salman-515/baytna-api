@@ -9,6 +9,7 @@ import { Role } from '../../common/enums/role.enum';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { AuditAction } from '../audit-log/schemas/audit-log.schema';
 import { CountriesService } from '../countries/countries.service';
+import { NotificationEventType } from '../notifications/notification-event';
 import { PricingService } from '../pricing/pricing.service';
 import { ServicesService } from '../services/services.service';
 import { UsersService } from '../users/users.service';
@@ -19,6 +20,7 @@ import { DirectAssignmentStrategy } from './assignment/direct-assignment.strateg
 import { NearestAvailableAssignmentStrategy } from './assignment/nearest-available-assignment.strategy';
 import { BookingsService } from './bookings.service';
 import { InstantMatchingService } from './instant-matching.service';
+import { BOOKING_NOTIFIER } from './notifications/booking-notifier.interface';
 import { BookingOffer } from './schemas/booking-offer.schema';
 import { Booking } from './schemas/booking.schema';
 
@@ -58,6 +60,7 @@ function fakeBooking(overrides: Record<string, unknown> = {}) {
     cancelledAt: null,
     cancellation: null,
     rejectionReason: null,
+    customerId: 'customer-1',
     save: jest.fn(),
     ...overrides,
   };
@@ -98,6 +101,7 @@ describe('BookingsService', () => {
   };
   let directAssignmentStrategy: { resolveWorker: jest.Mock };
   let nearestAvailableAssignmentStrategy: { resolveWorker: jest.Mock };
+  let notifier: { notify: jest.Mock; notifyOffer: jest.Mock };
 
   const workerServiceId = 'worker-service-1';
   const cityId = 'city-1';
@@ -177,9 +181,14 @@ describe('BookingsService', () => {
     countriesService = { findActiveById: jest.fn().mockResolvedValue(country) };
     pricingService = { quote: jest.fn().mockResolvedValue(quote) };
     usersService = {
-      findById: jest.fn().mockResolvedValue({ phone: '+963900000000', countryId: 'country-1' }),
+      findById: jest.fn().mockResolvedValue({
+        phone: '+963900000000',
+        countryId: 'country-1',
+        profile: { firstName: 'Layla' },
+      }),
     };
     auditLogService = { record: jest.fn().mockResolvedValue(undefined) };
+    notifier = { notify: jest.fn().mockResolvedValue(undefined), notifyOffer: jest.fn() };
     instantMatchingService = {
       startSearch: jest.fn().mockResolvedValue(undefined),
       markOutstandingOffersStale: jest.fn().mockResolvedValue(undefined),
@@ -215,6 +224,7 @@ describe('BookingsService', () => {
           provide: NearestAvailableAssignmentStrategy,
           useValue: nearestAvailableAssignmentStrategy,
         },
+        { provide: BOOKING_NOTIFIER, useValue: notifier },
       ],
     }).compile();
 
@@ -473,6 +483,14 @@ describe('BookingsService', () => {
       expect(booking.status).toBe(BookingStatus.ACCEPTED);
       expect(booking.acceptedAt).toBeInstanceOf(Date);
       expect(booking.save).toHaveBeenCalled();
+      expect(notifier.notify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: NotificationEventType.BOOKING_ACCEPTED,
+          recipientUserId: 'customer-1',
+          bookingId,
+          context: { workerDisplayName: 'Layla' },
+        }),
+      );
     });
 
     it('reject sets REJECTED and stores the reason', async () => {
@@ -493,7 +511,35 @@ describe('BookingsService', () => {
       expect(booking.save).not.toHaveBeenCalled();
     });
 
-    it('start sets IN_PROGRESS and startedAt', async () => {
+    it('onTheWay notifies the customer', async () => {
+      const booking = fakeBooking({ status: BookingStatus.ACCEPTED });
+      bookingModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(booking) });
+
+      await service.onTheWay(workerProfileId, bookingId);
+
+      expect(booking.status).toBe(BookingStatus.ON_THE_WAY);
+      expect(notifier.notify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: NotificationEventType.WORKER_ON_THE_WAY,
+          recipientUserId: 'customer-1',
+          bookingId,
+        }),
+      );
+    });
+
+    it('arrived notifies the customer', async () => {
+      const booking = fakeBooking({ status: BookingStatus.ON_THE_WAY });
+      bookingModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(booking) });
+
+      await service.arrived(workerProfileId, bookingId);
+
+      expect(booking.status).toBe(BookingStatus.ARRIVED);
+      expect(notifier.notify).toHaveBeenCalledWith(
+        expect.objectContaining({ type: NotificationEventType.WORKER_ARRIVED, bookingId }),
+      );
+    });
+
+    it('start sets IN_PROGRESS and startedAt, and notifies the customer', async () => {
       const booking = fakeBooking({ status: BookingStatus.ARRIVED });
       bookingModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(booking) });
 
@@ -501,9 +547,12 @@ describe('BookingsService', () => {
 
       expect(booking.status).toBe(BookingStatus.IN_PROGRESS);
       expect(booking.startedAt).toBeInstanceOf(Date);
+      expect(notifier.notify).toHaveBeenCalledWith(
+        expect.objectContaining({ type: NotificationEventType.JOB_STARTED, bookingId }),
+      );
     });
 
-    it('complete recomputes finalPricing for HOURLY from actual elapsed time, using the frozen rate', async () => {
+    it('complete recomputes finalPricing for HOURLY from actual elapsed time, using the frozen rate, and notifies the customer', async () => {
       const startedAt = new Date(Date.now() - 3 * 60 * 60 * 1000); // 3 hours ago
       const booking = fakeBooking({ status: BookingStatus.IN_PROGRESS, startedAt });
       bookingModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(booking) });
@@ -514,6 +563,9 @@ describe('BookingsService', () => {
       expect(booking.completedAt).toBeInstanceOf(Date);
       expect((booking.finalPricing as Record<string, unknown>).basePrice).toBe(9000); // 3000 * 3h
       expect((booking.finalPricing as Record<string, unknown>).hourlyRate).toBe(3000);
+      expect(notifier.notify).toHaveBeenCalledWith(
+        expect.objectContaining({ type: NotificationEventType.JOB_COMPLETED, bookingId }),
+      );
     });
 
     it('complete enforces minHours on the actual elapsed time', async () => {
@@ -564,6 +616,7 @@ describe('BookingsService', () => {
         acceptedAt: new Date(),
         serviceId: { toString: () => 'service-1' },
         pendingQuoteParams: { estimatedHours: 2, roomCount: null },
+        customerId: 'customer-1',
         ...overrides,
       };
       booking.save = jest.fn().mockResolvedValue(booking);
@@ -609,6 +662,14 @@ describe('BookingsService', () => {
         expect.objectContaining({ basePrice: 6000, workerEarnings: 5100 }),
       );
       expect(instantMatchingService.resolveOffers).toHaveBeenCalledWith(bookingId, workerProfileId);
+      expect(notifier.notify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: NotificationEventType.BOOKING_ACCEPTED,
+          recipientUserId: 'customer-1',
+          bookingId,
+          context: { workerDisplayName: 'Layla' },
+        }),
+      );
     });
 
     it('fires N concurrent accept attempts at one booking and exactly one wins, with exactly one workerProfileId ending up on the booking', async () => {
@@ -742,7 +803,7 @@ describe('BookingsService', () => {
       expect((booking.cancellation as Record<string, unknown>).feeAmount).toBe(1200);
     });
 
-    it('never charges the customer a fee when the worker cancels after accepting', async () => {
+    it('never charges the customer a fee when the worker cancels after accepting, and notifies the customer', async () => {
       const booking = fakeBooking({ status: BookingStatus.ACCEPTED });
       bookingModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(booking) });
 
@@ -752,6 +813,32 @@ describe('BookingsService', () => {
       expect(cancellation.feeAmount).toBe(0);
       expect(cancellation.byRole).toBe(Role.WORKER);
       expect(cancellation.byUserId).toBe('worker-user-1');
+      expect(notifier.notify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: NotificationEventType.BOOKING_CANCELLED,
+          recipientUserId: 'customer-1',
+          bookingId,
+          context: { reason: 'Family emergency' },
+        }),
+      );
+    });
+
+    it('notifies the already-assigned worker when the customer cancels a committed booking', async () => {
+      const booking = fakeBooking({
+        status: BookingStatus.ACCEPTED,
+        workerProfileId: { toString: () => workerProfileId },
+      });
+      bookingModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(booking) });
+
+      await service.cancelByCustomer(customerId, bookingId, 'Change of plans');
+
+      expect(notifier.notify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: NotificationEventType.BOOKING_CANCELLED,
+          recipientUserId: 'worker-user-1',
+          bookingId,
+        }),
+      );
     });
 
     it('charges no fee when the customer cancels while SEARCHING (INSTANT, no worker ever committed) and stops the broadcast', async () => {
@@ -772,8 +859,11 @@ describe('BookingsService', () => {
   });
 
   describe('admin force-status', () => {
-    it('forces CANCELLED, sets cancelledAt, and writes an audit log entry', async () => {
-      const booking = fakeBooking({ status: BookingStatus.ACCEPTED });
+    it('forces CANCELLED, sets cancelledAt, writes an audit log entry, and notifies the customer and the assigned worker', async () => {
+      const booking = fakeBooking({
+        status: BookingStatus.ACCEPTED,
+        workerProfileId: { toString: () => workerProfileId },
+      });
       bookingModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(booking) });
 
       await service.forceStatus('admin-1', bookingId, {
@@ -791,9 +881,23 @@ describe('BookingsService', () => {
           targetId: bookingId,
         }),
       );
+      expect(notifier.notify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: NotificationEventType.BOOKING_CANCELLED,
+          recipientUserId: 'customer-1',
+          bookingId,
+        }),
+      );
+      expect(notifier.notify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: NotificationEventType.BOOKING_CANCELLED,
+          recipientUserId: 'worker-user-1',
+          bookingId,
+        }),
+      );
     });
 
-    it('forces NO_SHOW without setting cancelledAt, and writes the matching audit action', async () => {
+    it('forces NO_SHOW without setting cancelledAt, writes the matching audit action, and sends no cancellation notification', async () => {
       const booking = fakeBooking({ status: BookingStatus.IN_PROGRESS });
       bookingModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(booking) });
 
@@ -807,6 +911,7 @@ describe('BookingsService', () => {
       expect(auditLogService.record).toHaveBeenCalledWith(
         expect.objectContaining({ action: AuditAction.BOOKING_FORCE_NO_SHOW }),
       );
+      expect(notifier.notify).not.toHaveBeenCalled();
     });
 
     it('rejects forcing a transition that is not legal from the current status', async () => {

@@ -4,8 +4,10 @@ import { SchedulerRegistry } from '@nestjs/schedule';
 import { Test, TestingModule } from '@nestjs/testing';
 import { BookingStatus } from '../../common/enums/booking-status.enum';
 import { CountriesService } from '../countries/countries.service';
+import { NotificationEventType } from '../notifications/notification-event';
 import { InstantMatchingSweepService } from './instant-matching-sweep.service';
 import { InstantMatchingService } from './instant-matching.service';
+import { BOOKING_NOTIFIER } from './notifications/booking-notifier.interface';
 import { Booking } from './schemas/booking.schema';
 
 describe('InstantMatchingSweepService', () => {
@@ -19,6 +21,7 @@ describe('InstantMatchingSweepService', () => {
     doesExist: jest.Mock;
     deleteInterval: jest.Mock;
   };
+  let notifier: { notify: jest.Mock; notifyOffer: jest.Mock };
 
   const country = {
     instantMatchingPolicy: {
@@ -34,6 +37,7 @@ describe('InstantMatchingSweepService', () => {
       _id: 'booking-1',
       id: 'booking-1',
       countryId: { toString: () => 'country-1' },
+      customerId: { toString: () => 'customer-1' },
       instantMatching: {
         searchStartedAt: new Date(),
         currentWaveIndex: 0,
@@ -56,6 +60,7 @@ describe('InstantMatchingSweepService', () => {
       doesExist: jest.fn().mockReturnValue(false),
       deleteInterval: jest.fn(),
     };
+    notifier = { notify: jest.fn().mockResolvedValue(undefined), notifyOffer: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -65,6 +70,7 @@ describe('InstantMatchingSweepService', () => {
         { provide: CountriesService, useValue: countriesService },
         { provide: ConfigService, useValue: configService },
         { provide: SchedulerRegistry, useValue: schedulerRegistry },
+        { provide: BOOKING_NOTIFIER, useValue: notifier },
       ],
     }).compile();
 
@@ -161,6 +167,13 @@ describe('InstantMatchingSweepService', () => {
       );
       expect(bookingModel.findOneAndUpdate).toHaveBeenCalledTimes(1); // never also tries to expand the wave
       expect(instantMatchingService.markOutstandingOffersStale).toHaveBeenCalledWith('booking-1');
+      expect(notifier.notify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: NotificationEventType.NO_WORKER_FOUND,
+          recipientUserId: 'customer-1',
+          bookingId: 'booking-1',
+        }),
+      );
       expect(result).toEqual({ expanded: 0, noWorkerFound: 1 });
     });
 

@@ -229,6 +229,12 @@ export class Booking extends BaseSchema {
 
   @Prop({ type: String, default: null })
   customerNote!: string | null;
+
+  // Set the first time ScheduledReminderSweepService sends a
+  // SCHEDULED_REMINDER for this booking — guards against re-sending on
+  // every sweep tick between then and scheduledFor. SCHEDULED only.
+  @Prop({ type: Date, default: null })
+  reminderSentAt!: Date | null;
 }
 
 export const BookingSchema = SchemaFactory.createForClass(Booking);
