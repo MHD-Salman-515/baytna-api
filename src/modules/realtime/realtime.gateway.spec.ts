@@ -1,6 +1,8 @@
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { BookingsService } from '../bookings/bookings.service';
+import { LocationTrackingService } from '../bookings/location-tracking.service';
+import { WorkerProfilesService } from '../workers/worker-profiles.service';
 import { AuthenticatedSocket, RealtimeGateway } from './realtime.gateway';
 import { bookingRoom, userRoom } from './rooms';
 
@@ -9,6 +11,8 @@ describe('RealtimeGateway', () => {
   let jwtService: { verifyAsync: jest.Mock };
   let configService: { get: jest.Mock };
   let bookingsService: { isPartyToBooking: jest.Mock };
+  let locationTrackingService: { recordPoint: jest.Mock };
+  let workerProfilesService: { getOwn: jest.Mock };
 
   function fakeSocket(overrides: Record<string, unknown> = {}): AuthenticatedSocket {
     return {
@@ -23,13 +27,23 @@ describe('RealtimeGateway', () => {
 
   beforeEach(() => {
     jwtService = { verifyAsync: jest.fn() };
-    configService = { get: jest.fn().mockReturnValue('access-secret') };
+    configService = {
+      get: jest
+        .fn()
+        .mockImplementation((key: string, fallback?: unknown) =>
+          key === 'jwtAccessSecret' ? 'access-secret' : fallback,
+        ),
+    };
     bookingsService = { isPartyToBooking: jest.fn() };
+    locationTrackingService = { recordPoint: jest.fn() };
+    workerProfilesService = { getOwn: jest.fn() };
 
     gateway = new RealtimeGateway(
       jwtService as unknown as JwtService,
       configService as unknown as ConfigService,
       bookingsService as unknown as BookingsService,
+      locationTrackingService as unknown as LocationTrackingService,
+      workerProfilesService as unknown as WorkerProfilesService,
     );
   });
 
@@ -134,6 +148,119 @@ describe('RealtimeGateway', () => {
 
       expect(result).toEqual({ ok: false, error: 'forbidden' });
       expect(bookingsService.isPartyToBooking).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('handleLocationUpdate', () => {
+    const point = { type: 'Point' as const, coordinates: [36.3, 33.5] as [number, number] };
+
+    function withServer() {
+      const emit = jest.fn();
+      const to = jest.fn().mockReturnValue({ emit });
+      (gateway as unknown as { server: unknown }).server = { to };
+      return { emit, to };
+    }
+
+    it('rejects an unauthenticated socket', async () => {
+      const socket = fakeSocket();
+
+      const result = await gateway.handleLocationUpdate(socket, { bookingId: 'booking-1', point });
+
+      expect(result).toEqual({ ok: false, reason: 'forbidden' });
+      expect(locationTrackingService.recordPoint).not.toHaveBeenCalled();
+    });
+
+    it('rejects a message missing bookingId or point without ever querying', async () => {
+      const socket = fakeSocket({ user: { userId: 'user-1', roles: ['WORKER'] as never } });
+
+      const result = await gateway.handleLocationUpdate(socket, {});
+
+      expect(result).toEqual({ ok: false, reason: 'forbidden' });
+      expect(workerProfilesService.getOwn).not.toHaveBeenCalled();
+    });
+
+    it("rejects when the socket's user has no worker profile", async () => {
+      const socket = fakeSocket({ user: { userId: 'user-1', roles: ['WORKER'] as never } });
+      workerProfilesService.getOwn.mockRejectedValue(new Error('not found'));
+
+      const result = await gateway.handleLocationUpdate(socket, { bookingId: 'booking-1', point });
+
+      expect(result).toEqual({ ok: false, reason: 'forbidden' });
+      expect(locationTrackingService.recordPoint).not.toHaveBeenCalled();
+    });
+
+    it('relays an accepted point to the booking room and reports ok', async () => {
+      const socket = fakeSocket({ user: { userId: 'user-1', roles: ['WORKER'] as never } });
+      workerProfilesService.getOwn.mockResolvedValue({ id: 'worker-profile-1' });
+      locationTrackingService.recordPoint.mockResolvedValue({ accepted: true });
+      const { to, emit } = withServer();
+
+      const result = await gateway.handleLocationUpdate(socket, { bookingId: 'booking-1', point });
+
+      expect(result).toEqual({ ok: true, reason: undefined });
+      expect(locationTrackingService.recordPoint).toHaveBeenCalledWith(
+        'worker-profile-1',
+        'booking-1',
+        point,
+      );
+      expect(to).toHaveBeenCalledWith(bookingRoom('booking-1'));
+      expect(emit).toHaveBeenCalledWith(
+        'location:update',
+        expect.objectContaining({ bookingId: 'booking-1', point }),
+      );
+    });
+
+    it('relays nothing and reports the rejection reason when the service rejects the point (e.g. wrong status)', async () => {
+      const socket = fakeSocket({ user: { userId: 'user-1', roles: ['WORKER'] as never } });
+      workerProfilesService.getOwn.mockResolvedValue({ id: 'worker-profile-1' });
+      locationTrackingService.recordPoint.mockResolvedValue({
+        accepted: false,
+        reason: 'not_active',
+      });
+      const { to } = withServer();
+
+      const result = await gateway.handleLocationUpdate(socket, { bookingId: 'booking-1', point });
+
+      expect(result).toEqual({ ok: false, reason: 'not_active' });
+      expect(to).not.toHaveBeenCalled();
+    });
+
+    it('throttles a second message from the same connection arriving within the configured minimum interval', async () => {
+      configService.get.mockImplementation((key: string, fallback?: unknown) =>
+        key === 'location.updateMinIntervalSeconds' ? 5 : fallback,
+      );
+      const socket = fakeSocket({ user: { userId: 'user-1', roles: ['WORKER'] as never } });
+      workerProfilesService.getOwn.mockResolvedValue({ id: 'worker-profile-1' });
+      locationTrackingService.recordPoint.mockResolvedValue({ accepted: true });
+      withServer();
+
+      await gateway.handleLocationUpdate(socket, { bookingId: 'booking-1', point });
+      const second = await gateway.handleLocationUpdate(socket, { bookingId: 'booking-1', point });
+
+      expect(second).toEqual({ ok: false, reason: 'throttled' });
+      expect(locationTrackingService.recordPoint).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not throttle a different connection', async () => {
+      configService.get.mockImplementation((key: string, fallback?: unknown) =>
+        key === 'location.updateMinIntervalSeconds' ? 5 : fallback,
+      );
+      const socketA = fakeSocket({
+        id: 'socket-a',
+        user: { userId: 'user-1', roles: ['WORKER'] as never },
+      });
+      const socketB = fakeSocket({
+        id: 'socket-b',
+        user: { userId: 'user-2', roles: ['WORKER'] as never },
+      });
+      workerProfilesService.getOwn.mockResolvedValue({ id: 'worker-profile-1' });
+      locationTrackingService.recordPoint.mockResolvedValue({ accepted: true });
+      withServer();
+
+      await gateway.handleLocationUpdate(socketA, { bookingId: 'booking-1', point });
+      const result = await gateway.handleLocationUpdate(socketB, { bookingId: 'booking-1', point });
+
+      expect(result).toEqual({ ok: true, reason: undefined });
     });
   });
 

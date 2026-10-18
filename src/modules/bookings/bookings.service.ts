@@ -36,6 +36,7 @@ import { FindBookingsQueryDto } from './dto/find-bookings-query.dto';
 import { ForceBookingStatusDto } from './dto/force-booking-status.dto';
 import { generateBookingNumber } from './generate-booking-number';
 import { InstantMatchingService } from './instant-matching.service';
+import { LocationTrackingService } from './location-tracking.service';
 import { BOOKING_NOTIFIER, BookingNotifier } from './notifications/booking-notifier.interface';
 import { OfferProjectionInput, toOfferView } from './offer-projection';
 import {
@@ -76,6 +77,7 @@ export class BookingsService {
     // on booking type beyond createScheduled vs createInstant themselves.
     private readonly directAssignmentStrategy: DirectAssignmentStrategy,
     private readonly nearestAvailableAssignmentStrategy: NearestAvailableAssignmentStrategy,
+    private readonly locationTrackingService: LocationTrackingService,
     @Inject(BOOKING_NOTIFIER) private readonly notifier: BookingNotifier,
   ) {}
 
@@ -503,6 +505,8 @@ export class BookingsService {
     booking.status = assertValidAction(booking.status, BookingAction.ARRIVED, 'WORKER');
     await booking.save();
 
+    await this.locationTrackingService.recordArrivalDistance(bookingId, booking.address.point);
+
     await this.notifier.notify({
       type: NotificationEventType.WORKER_ARRIVED,
       recipientUserId: booking.customerId.toString(),
@@ -543,6 +547,7 @@ export class BookingsService {
     booking.finalPricing = computeFinalPricing(booking.pricing!, elapsedHours);
 
     await booking.save();
+    await this.locationTrackingService.markTerminated(bookingId);
 
     await this.notifier.notify({
       type: NotificationEventType.JOB_COMPLETED,
@@ -580,6 +585,7 @@ export class BookingsService {
       feeAmount,
     };
     await booking.save();
+    await this.locationTrackingService.markTerminated(bookingId);
 
     if (previousStatus === BookingStatus.SEARCHING) {
       await this.instantMatchingService.markOutstandingOffersStale(bookingId);
@@ -614,6 +620,7 @@ export class BookingsService {
       feeAmount: 0,
     };
     await booking.save();
+    await this.locationTrackingService.markTerminated(bookingId);
 
     await this.notifier.notify({
       type: NotificationEventType.BOOKING_CANCELLED,
@@ -659,6 +666,9 @@ export class BookingsService {
       targetId: bookingId,
       metadata: { from: previousStatus, to: booking.status, reason: dto.reason },
     });
+
+    // Both outcomes here are terminal with respect to tracking.
+    await this.locationTrackingService.markTerminated(bookingId);
 
     if (booking.status === BookingStatus.CANCELLED) {
       await this.notifier.notify({

@@ -24,9 +24,15 @@ import { BookingsController } from './bookings.controller';
 import { BookingsService } from './bookings.service';
 import { InstantMatchingSweepService } from './instant-matching-sweep.service';
 import { InstantMatchingService } from './instant-matching.service';
+import { LocationTrackingService } from './location-tracking.service';
+import { LocationTrailPurgeSweepService } from './location-trail-purge-sweep.service';
 import { BOOKING_NOTIFIER } from './notifications/booking-notifier.interface';
 import { createBookingNotifier } from './notifications/booking-notifier.factory';
 import { ScheduledReminderSweepService } from './scheduled-reminder-sweep.service';
+import {
+  BookingLocationTrail,
+  BookingLocationTrailSchema,
+} from './schemas/booking-location-trail.schema';
 import { BookingOffer, BookingOfferSchema } from './schemas/booking-offer.schema';
 import { Booking, BookingSchema } from './schemas/booking.schema';
 import { WorkerBookingsController } from './worker-bookings.controller';
@@ -38,6 +44,7 @@ import { WorkerSlotsController } from './worker-slots.controller';
     MongooseModule.forFeature([
       { name: Booking.name, schema: BookingSchema },
       { name: BookingOffer.name, schema: BookingOfferSchema },
+      { name: BookingLocationTrail.name, schema: BookingLocationTrailSchema },
     ]),
     WorkersModule,
     ServicesModule,
@@ -72,6 +79,8 @@ import { WorkerSlotsController } from './worker-slots.controller';
     InstantMatchingSweepService,
     BookingExpiryService,
     ScheduledReminderSweepService,
+    LocationTrackingService,
+    LocationTrailPurgeSweepService,
     {
       provide: BOOKING_NOTIFIER,
       // forwardRef is supported at runtime for factory `inject` entries (see
@@ -90,6 +99,6 @@ import { WorkerSlotsController } from './worker-slots.controller';
       useFactory: createBookingNotifier,
     },
   ],
-  exports: [BookingsService],
+  exports: [BookingsService, LocationTrackingService],
 })
 export class BookingsModule {}

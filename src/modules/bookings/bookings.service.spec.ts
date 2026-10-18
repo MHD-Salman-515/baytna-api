@@ -20,6 +20,7 @@ import { DirectAssignmentStrategy } from './assignment/direct-assignment.strateg
 import { NearestAvailableAssignmentStrategy } from './assignment/nearest-available-assignment.strategy';
 import { BookingsService } from './bookings.service';
 import { InstantMatchingService } from './instant-matching.service';
+import { LocationTrackingService } from './location-tracking.service';
 import { BOOKING_NOTIFIER } from './notifications/booking-notifier.interface';
 import { BookingOffer } from './schemas/booking-offer.schema';
 import { Booking } from './schemas/booking.schema';
@@ -61,6 +62,7 @@ function fakeBooking(overrides: Record<string, unknown> = {}) {
     cancellation: null,
     rejectionReason: null,
     customerId: 'customer-1',
+    address: { point: { type: 'Point', coordinates: [36.3, 33.5] } },
     save: jest.fn(),
     ...overrides,
   };
@@ -102,6 +104,7 @@ describe('BookingsService', () => {
   let directAssignmentStrategy: { resolveWorker: jest.Mock };
   let nearestAvailableAssignmentStrategy: { resolveWorker: jest.Mock };
   let notifier: { notify: jest.Mock; notifyOffer: jest.Mock };
+  let locationTrackingService: { recordArrivalDistance: jest.Mock; markTerminated: jest.Mock };
 
   const workerServiceId = 'worker-service-1';
   const cityId = 'city-1';
@@ -189,6 +192,10 @@ describe('BookingsService', () => {
     };
     auditLogService = { record: jest.fn().mockResolvedValue(undefined) };
     notifier = { notify: jest.fn().mockResolvedValue(undefined), notifyOffer: jest.fn() };
+    locationTrackingService = {
+      recordArrivalDistance: jest.fn().mockResolvedValue(undefined),
+      markTerminated: jest.fn().mockResolvedValue(undefined),
+    };
     instantMatchingService = {
       startSearch: jest.fn().mockResolvedValue(undefined),
       markOutstandingOffersStale: jest.fn().mockResolvedValue(undefined),
@@ -224,6 +231,7 @@ describe('BookingsService', () => {
           provide: NearestAvailableAssignmentStrategy,
           useValue: nearestAvailableAssignmentStrategy,
         },
+        { provide: LocationTrackingService, useValue: locationTrackingService },
         { provide: BOOKING_NOTIFIER, useValue: notifier },
       ],
     }).compile();
@@ -534,6 +542,10 @@ describe('BookingsService', () => {
       await service.arrived(workerProfileId, bookingId);
 
       expect(booking.status).toBe(BookingStatus.ARRIVED);
+      expect(locationTrackingService.recordArrivalDistance).toHaveBeenCalledWith(
+        bookingId,
+        (booking.address as { point: unknown }).point,
+      );
       expect(notifier.notify).toHaveBeenCalledWith(
         expect.objectContaining({ type: NotificationEventType.WORKER_ARRIVED, bookingId }),
       );
@@ -566,6 +578,7 @@ describe('BookingsService', () => {
       expect(notifier.notify).toHaveBeenCalledWith(
         expect.objectContaining({ type: NotificationEventType.JOB_COMPLETED, bookingId }),
       );
+      expect(locationTrackingService.markTerminated).toHaveBeenCalledWith(bookingId);
     });
 
     it('complete enforces minHours on the actual elapsed time', async () => {
@@ -821,6 +834,7 @@ describe('BookingsService', () => {
           context: { reason: 'Family emergency' },
         }),
       );
+      expect(locationTrackingService.markTerminated).toHaveBeenCalledWith(bookingId);
     });
 
     it('notifies the already-assigned worker when the customer cancels a committed booking', async () => {
@@ -873,6 +887,7 @@ describe('BookingsService', () => {
 
       expect(booking.status).toBe(BookingStatus.CANCELLED);
       expect(booking.cancelledAt).toBeInstanceOf(Date);
+      expect(locationTrackingService.markTerminated).toHaveBeenCalledWith(bookingId);
       expect(auditLogService.record).toHaveBeenCalledWith(
         expect.objectContaining({
           actorUserId: 'admin-1',

@@ -8,13 +8,17 @@ import { BookingsService } from './bookings.service';
 import { CreateBookingDto } from './dto/create-booking.dto';
 import { FindBookingsQueryDto } from './dto/find-bookings-query.dto';
 import { ReasonDto } from './dto/reason.dto';
+import { LocationTrackingService } from './location-tracking.service';
 
 @ApiTags('bookings')
 @ApiBearerAuth()
 @Roles(Role.CUSTOMER)
 @Controller('bookings')
 export class BookingsController {
-  constructor(private readonly bookingsService: BookingsService) {}
+  constructor(
+    private readonly bookingsService: BookingsService,
+    private readonly locationTrackingService: LocationTrackingService,
+  ) {}
 
   @Post()
   async create(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreateBookingDto) {
@@ -32,6 +36,13 @@ export class BookingsController {
   async getOne(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
     const booking = await this.bookingsService.getOwnForCustomer(user.userId, id);
     return this.bookingsService.projectForCustomer(booking);
+  }
+
+  /** getOwnForCustomer throws NotFoundException for a booking that isn't hers — the same ownership check every other customer-scoped route uses. */
+  @Get(':id/location')
+  async getLocation(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    const booking = await this.bookingsService.getOwnForCustomer(user.userId, id);
+    return this.locationTrackingService.getCurrentPosition(id, booking.address.point);
   }
 
   @Post(':id/cancel')
