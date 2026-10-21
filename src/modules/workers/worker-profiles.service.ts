@@ -18,6 +18,7 @@ import { ReviewWorkerDto } from './dto/review-worker.dto';
 import { UpsertWorkerProfileDto } from './dto/upsert-worker-profile.dto';
 import { getRequiredDocumentTypes } from './document-requirements.config';
 import {
+  FinancialStatus,
   VerificationStatus,
   WorkerProfile,
   WorkerProfileDocument,
@@ -175,17 +176,22 @@ export class WorkerProfilesService {
   }
 
   /**
-   * Used by PricingService to gate quoting on exactly the same visibility
-   * rule as the public listing (APPROVED + available + non-deleted) — a
-   * customer should never be able to get a quote for a worker she couldn't
-   * otherwise see. Returns null rather than throwing; the caller decides
-   * what "not quotable" should look like.
+   * Used by PricingService (and BookingsService's SCHEDULED creation/free-
+   * slots paths) to gate on exactly the same visibility rule as the public
+   * listing (APPROVED + available + financially ACTIVE + non-deleted) — a
+   * customer should never be able to get a quote for, or book, a worker she
+   * couldn't otherwise see — and a financially suspended worker must never
+   * be bookable, even though she can still finish a job already in
+   * progress (nothing here touches an existing booking's own lifecycle).
+   * Returns null rather than throwing; the caller decides what "not
+   * quotable" should look like.
    */
   async findApprovedById(workerProfileId: string): Promise<WorkerProfileDocument | null> {
     return this.profileModel
       .findOne({
         _id: workerProfileId,
         verificationStatus: VerificationStatus.APPROVED,
+        financialStatus: FinancialStatus.ACTIVE,
         isAvailable: true,
         isDeleted: false,
       })
@@ -195,9 +201,10 @@ export class WorkerProfilesService {
   /**
    * Used by WorkerPresenceService to narrow a geo-matched candidate list
    * down to workers who are actually eligible to receive an INSTANT offer:
-   * APPROVED, isAvailable, non-deleted, and serving the requested city.
-   * Returns the subset of the given ids that qualify — order not preserved
-   * (the caller re-sorts by distance, which this has no knowledge of).
+   * APPROVED, financially ACTIVE, isAvailable, non-deleted, and serving the
+   * requested city. Returns the subset of the given ids that qualify —
+   * order not preserved (the caller re-sorts by distance, which this has no
+   * knowledge of).
    */
   async filterApprovedAvailableInCity(
     workerProfileIds: string[],
@@ -210,12 +217,19 @@ export class WorkerProfilesService {
       .find({
         _id: { $in: workerProfileIds },
         verificationStatus: VerificationStatus.APPROVED,
+        financialStatus: FinancialStatus.ACTIVE,
         isAvailable: true,
         isDeleted: false,
         serviceAreas: cityId,
       })
       .select('_id')
       .exec();
+    return matches.map((m) => m.id as string);
+  }
+
+  /** Used by WalletsService's admin wallet listing to filter by financial status — a cross-domain lookup kept behind this service, not a raw model, same discipline as every other cross-module query in this app. */
+  async listIdsByFinancialStatus(status: FinancialStatus): Promise<string[]> {
+    const matches = await this.profileModel.find({ financialStatus: status }).select('_id').exec();
     return matches.map((m) => m.id as string);
   }
 

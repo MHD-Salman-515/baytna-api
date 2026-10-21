@@ -17,6 +17,7 @@ import {
   toPublicWorkerProfile,
 } from './public-worker-projection';
 import {
+  FinancialStatus,
   VerificationStatus,
   WorkerProfile,
   WorkerProfileDocument,
@@ -37,6 +38,7 @@ export class PublicWorkersService {
   async findMany(query: FindPublicWorkersQueryDto): Promise<PaginatedResult<PublicWorkerProfile>> {
     const filter: Record<string, unknown> = {
       verificationStatus: VerificationStatus.APPROVED,
+      financialStatus: FinancialStatus.ACTIVE,
       isAvailable: true,
       isDeleted: false,
     };
@@ -100,6 +102,7 @@ export class PublicWorkersService {
       .findOne({
         _id: workerProfileId,
         verificationStatus: VerificationStatus.APPROVED,
+        financialStatus: FinancialStatus.ACTIVE,
         isAvailable: true,
         isDeleted: false,
       })

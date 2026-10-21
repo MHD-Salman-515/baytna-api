@@ -24,6 +24,7 @@ import { PricingModule } from './modules/pricing/pricing.module';
 import { BookingsModule } from './modules/bookings/bookings.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { RealtimeModule } from './modules/realtime/realtime.module';
+import { WalletsModule } from './modules/wallets/wallets.module';
 
 @Module({
   imports: [
@@ -75,6 +76,7 @@ import { RealtimeModule } from './modules/realtime/realtime.module';
     ServicesModule,
     WorkersModule,
     PricingModule,
+    WalletsModule,
     BookingsModule,
     NotificationsModule,
     RealtimeModule,

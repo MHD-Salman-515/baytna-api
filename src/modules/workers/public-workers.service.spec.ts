@@ -4,7 +4,11 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { PricingType } from '../../common/enums/pricing-type.enum';
 import { ServicesService } from '../services/services.service';
 import { PublicWorkersSortBy, SortOrder } from './dto/find-public-workers-query.dto';
-import { VerificationStatus, WorkerProfile } from './schemas/worker-profile.schema';
+import {
+  FinancialStatus,
+  VerificationStatus,
+  WorkerProfile,
+} from './schemas/worker-profile.schema';
 import { WorkerService } from './schemas/worker-service.schema';
 import { WorkerDocumentsService } from './worker-documents.service';
 import { PublicWorkersService } from './public-workers.service';
@@ -55,6 +59,7 @@ describe('PublicWorkersService', () => {
 
       expect(profileModel.find).toHaveBeenCalledWith({
         verificationStatus: VerificationStatus.APPROVED,
+        financialStatus: FinancialStatus.ACTIVE,
         isAvailable: true,
         isDeleted: false,
       });

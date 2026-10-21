@@ -8,7 +8,11 @@ import { CountriesService } from '../countries/countries.service';
 import { UserStatus } from '../users/schemas/user.schema';
 import { UsersService } from '../users/users.service';
 import { DocumentType } from './schemas/worker-document.schema';
-import { VerificationStatus, WorkerProfile } from './schemas/worker-profile.schema';
+import {
+  FinancialStatus,
+  VerificationStatus,
+  WorkerProfile,
+} from './schemas/worker-profile.schema';
 import { WorkerDocumentsService } from './worker-documents.service';
 import { WorkerProfilesService } from './worker-profiles.service';
 
@@ -343,6 +347,7 @@ describe('WorkerProfilesService', () => {
       expect(profileModel.findOne).toHaveBeenCalledWith({
         _id: 'profile-1',
         verificationStatus: VerificationStatus.APPROVED,
+        financialStatus: FinancialStatus.ACTIVE,
         isAvailable: true,
         isDeleted: false,
       });
@@ -472,11 +477,28 @@ describe('WorkerProfilesService', () => {
       expect(profileModel.find).toHaveBeenCalledWith({
         _id: { $in: ['worker-1', 'worker-2', 'worker-3'] },
         verificationStatus: VerificationStatus.APPROVED,
+        financialStatus: FinancialStatus.ACTIVE,
         isAvailable: true,
         isDeleted: false,
         serviceAreas: 'city-1',
       });
       expect(result).toEqual(['worker-1', 'worker-3']);
+    });
+  });
+
+  describe('listIdsByFinancialStatus', () => {
+    it('queries by financialStatus alone and returns matching ids', async () => {
+      const select = jest.fn().mockReturnValue({
+        exec: jest.fn().mockResolvedValue([{ id: 'worker-1' }, { id: 'worker-2' }]),
+      });
+      profileModel.find.mockReturnValue({ select });
+
+      const result = await service.listIdsByFinancialStatus(FinancialStatus.SUSPENDED);
+
+      expect(profileModel.find).toHaveBeenCalledWith({
+        financialStatus: FinancialStatus.SUSPENDED,
+      });
+      expect(result).toEqual(['worker-1', 'worker-2']);
     });
   });
 });
