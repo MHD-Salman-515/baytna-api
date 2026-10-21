@@ -25,6 +25,7 @@ import { BookingsModule } from './modules/bookings/bookings.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { RealtimeModule } from './modules/realtime/realtime.module';
 import { WalletsModule } from './modules/wallets/wallets.module';
+import { ReviewsModule } from './modules/reviews/reviews.module';
 
 @Module({
   imports: [
@@ -80,6 +81,7 @@ import { WalletsModule } from './modules/wallets/wallets.module';
     BookingsModule,
     NotificationsModule,
     RealtimeModule,
+    ReviewsModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
