@@ -1120,6 +1120,161 @@ the throttle window, trail capping via `$slice`, arrival-distance recording), `r
 `scheduled-reminder-sweep.service.spec.ts` (claim-then-update, a losing claim sends nothing, a failed
 profile lookup for one booking doesn't break the rest).
 
+## Worker wallet, commission collection and suspension (Phase 8)
+
+Phases 1-7 computed and persisted `commissionAmount`/`workerEarnings` on every booking, and even
+`feeAmount` on a customer cancellation — but nothing ever moved money. This phase does. Payments in
+this market are **cash**, handed directly from the customer to the worker; the platform never holds
+it. Commission is instead collected from a **prepaid balance** each worker tops up (in person, or
+through an agent — the admin records it), debited automatically when a booking completes.
+
+### The ledger — append-only, not a mutable counter
+
+`wallet_entries` is the source of truth; `wallets` caches the current balance only for fast reads.
+Every write goes through one path, `WalletsService.recordEntry`, which:
+
+- never updates or deletes an existing entry — `WalletsService` exposes no such method at all. A
+  mistake is corrected by writing a new `REVERSAL` entry that references the original via
+  `reversesEntryId`, with its own `amount` being the exact inverse of the original's.
+- is idempotent on `idempotencyKey` (unique-indexed). Charging the same booking twice — including
+  under a genuine concurrent race — produces exactly one `COMMISSION_CHARGE` entry: the first caller
+  wins, every other caller's insert hits the duplicate key and returns the winner's entry instead of
+  creating a second one.
+- stamps `balanceAfter` on every entry, so the ledger is self-verifying independent of the wallet's
+  cached `balance`.
+
+Entry types: `TOPUP`, `COMMISSION_CHARGE`, `CANCELLATION_FEE`, `ADJUSTMENT`, `REFUND`, `REVERSAL`.
+Money stays an integer (minor units), with `currency` recorded on every entry — same convention as
+`Booking.pricing`/`finalPricing` elsewhere in this app.
+
+**The non-transactional gap, documented on purpose.** Local MongoDB (docker-compose) is a standalone
+instance with no replica set, so multi-document transactions aren't available there (only Atlas
+guarantees one). `recordEntry` instead does `$inc` the wallet, then insert the entry under its unique
+`idempotencyKey`; on a duplicate-key conflict it undoes its own `$inc` and returns the existing
+winner's entry. The one case this doesn't cover is a process crash between the `$inc` and the
+insert/undo — which would show up as the cached balance disagreeing with the sum of entries. That's
+exactly what `npm run wallet:verify` is for: it recomputes every wallet's balance from its own
+`wallet_entries` and reports any drift loudly (non-zero exit), both against the wallet's cached
+balance and by re-walking each entry's own `balanceAfter` against the running sum. Drift means a bug,
+not a UI state to paper over.
+
+### Commission collection
+
+On `BookingsService.complete()`, after the booking is saved as `COMPLETED`, a `COMMISSION_CHARGE` is
+written for `finalPricing.commissionAmount` — the **final**, recomputed-from-actual-elapsed-time
+figure, never the original estimate — keyed by `commission:${bookingId}`. If the ledger write fails
+(wallet unreachable, transient DB error), the booking **still completes**: the failure is logged and
+an audit-log entry (`WALLET_COMMISSION_CHARGE_FAILED`, `actorUserId: null` — a system action) is
+written instead of silently losing the charge. `CommissionChargeRetrySweepService` polls every
+`COMMISSION_CHARGE_RETRY_SWEEP_INTERVAL_SECONDS` for any `COMPLETED` booking with
+`commissionChargedAt: null` and retries — safe to retry freely since the charge is idempotent.
+
+Customer cancellation fees (`Booking.cancellation.feeAmount`, computed since Phase 5) are **not**
+collected from anyone in this phase. The worker is never charged for a customer's cancellation — that
+fee is recorded as context only (who owes what, for a future reconciliation/dispute view). Collecting
+it from the customer is explicitly out of scope: payments are cash with no card on file, so there's
+nothing to charge against.
+
+A worker who cancels after accepting may owe her **own** wallet a `CANCELLATION_FEE` —
+`Country.walletPolicy.workerCancellationPenaltyAmount`, defaulting to **0** so it can be enabled later
+per-country without a code change. A wallet failure here is logged but never blocks the cancellation
+itself (unlike completion's commission charge, there's no retry sweep for this one — a missed penalty
+is a lenience, not lost revenue the booking had already earned).
+
+### Suspension on insufficient balance — independent of disciplinary suspension
+
+Each country's `walletPolicy` carries `negativeBalanceFloor` (default **-5000**, e.g. SYP) and
+`lowBalanceWarningThreshold` (default **-2000**). Crossing below the floor — from a commission charge,
+a cancellation penalty, or an admin `ADJUSTMENT`/`REVERSAL` — sets `WorkerProfile.financialStatus` to
+`SUSPENDED`, automatically, the moment it happens (edge-triggered: an already-suspended worker isn't
+re-processed or re-notified on a further charge). Staying at or below the warning threshold (but still
+above the floor) sends a low-balance warning notification every time that condition is checked —
+deliberately not edge-triggered, since nothing in the spec called for "only once" there.
+
+**`financialStatus` is its own field, completely separate from the Phase 3 disciplinary
+`verificationStatus`'s own `SUSPENDED` value.** Clearing one never clears the other — a worker can be
+financially fine but disciplinarily suspended, or the reverse. Every eligibility check that already
+gated on `verificationStatus === APPROVED` (`findApprovedById`, `filterApprovedAvailableInCity`,
+`PublicWorkersService.findMany`/`findOne`) now **also** requires `financialStatus === ACTIVE` — a
+financially suspended worker cannot receive instant offers, cannot be booked, and disappears from the
+public list. She can still finish a job already in progress: none of those eligibility gates run
+anywhere in the `accept → onTheWay → arrived → start → complete` path, only at offer/booking-creation
+time, so a mid-job suspension never strands a customer.
+
+Reinstatement is automatic **only** from a genuine `TOPUP` that brings the balance back above the
+floor (`WalletsService.applyReinstatementCheck` is called exclusively from `topup()` — never from
+`adjust`/`reverse`/a commission or penalty charge, so an admin correction crossing back above the
+floor does *not* silently reinstate her). Admins may also lift a financial suspension manually via
+`POST /admin/wallets/:workerProfileId/reinstate { reason }`, for disputes — audit-logged
+(`WALLET_REINSTATED`, `metadata.manual: true`), and refused with a 400 if she isn't currently
+financially suspended.
+
+### Endpoints
+
+Worker (own wallet only — enforced by resolving the wallet from her own profile, never from a client-
+supplied id):
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/v1/workers/me/wallet` | balance, currency, country (lazily created with balance 0 on first read) |
+| GET | `/api/v1/workers/me/wallet/entries` | her own ledger, paginated, newest first, each entry carrying its own `balanceAfter` |
+
+Admin (`Role.ADMIN`), keyed by `:workerProfileId` — the same stable identifier `/admin/workers/:id`
+already uses elsewhere in this app, deliberately reused instead of a separate internal wallet id a
+caller would otherwise have to look up first:
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/v1/admin/wallets` | paginated; `?status=SUSPENDED` or `?lowBalance=true` (resolved in-memory against each wallet's own country floor — same acceptable-at-this-scale tradeoff as the Phase 4 public-listing price sort) |
+| GET | `/api/v1/admin/wallets/:workerProfileId` | |
+| GET | `/api/v1/admin/wallets/:workerProfileId/entries` | paginated |
+| POST | `/api/v1/admin/wallets/:workerProfileId/topup` | `{ amount, reference, note?, idempotencyKey? }` — `reference` (a receipt/agent id) is mandatory; audit-logged (`WALLET_TOPUP`) |
+| POST | `/api/v1/admin/wallets/:workerProfileId/adjust` | `{ amount, reason }` — signed; audit-logged (`WALLET_ADJUSTMENT`) |
+| POST | `/api/v1/admin/wallets/:workerProfileId/reverse` | `{ entryId, reason }` — writes the compensating `REVERSAL`; refuses to reverse a `REVERSAL`; audit-logged (`WALLET_REVERSAL`) |
+| POST | `/api/v1/admin/wallets/:workerProfileId/reinstate` | `{ reason }` — manual financial reinstatement only; audit-logged (`WALLET_REINSTATED`) |
+
+**Out of scope, on purpose:** self-service top-up (a payment-gateway integration) — every top-up here
+is admin-recorded against a real-world reference, matching the cash-based, no-card-on-file model of
+the rest of this market. Collecting a customer's cancellation fee is likewise out of scope for the
+same reason (see above).
+
+### New environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `COMMISSION_CHARGE_RETRY_SWEEP_ENABLED` | `true` | toggles `CommissionChargeRetrySweepService` |
+| `COMMISSION_CHARGE_RETRY_SWEEP_INTERVAL_SECONDS` | `300` | its polling interval |
+
+Plus, per-country in `Country.walletPolicy` (admin-editable via the existing country CRUD, not an env
+var): `negativeBalanceFloor` (default `-5000`), `lowBalanceWarningThreshold` (default `-2000`),
+`workerCancellationPenaltyAmount` (default `0`).
+
+### `npm run wallet:verify`
+
+Recomputes every wallet's balance from the sum of its own `wallet_entries` (and separately re-walks
+each entry's own `balanceAfter` against the running sum) and reports any drift loudly — exits non-zero
+if it finds any. Run it the same way as `npm run seed:verify`, including the same `ALLOW_REMOTE_SEED`
+guard against accidentally pointing it at a shared/remote database by default.
+
+### Tests
+
+`wallets.service.spec.ts` covers `recordEntry`'s idempotency (a plain duplicate replay, and a genuine
+race via a forced duplicate-key insert that exercises the compensating `$inc` undo),
+`chargeCommission`'s suspension/warning thresholds (exactly at the floor, not before; never
+re-suspending an already-suspended worker), `topup`'s auto-reinstatement (only when the new balance
+actually clears the floor), `adjust`/`reverse` (including refusing to reverse a `REVERSAL`, and
+reversing the same entry twice being a no-op), `reinstateManually`'s guard against reinstating a
+worker who isn't suspended, and `listForAdmin`'s per-country `lowBalance` filtering.
+`bookings.service.spec.ts` adds coverage for `complete()` charging the commission from `finalPricing`
+and surviving a ledger failure without losing the COMPLETED transition (asserting the audit-log entry
+instead), and `cancelByWorker()` charging the configured penalty (zero by default) without the
+cancellation itself ever failing on a wallet error.
+`commission-charge-retry-sweep.service.spec.ts` covers the retry query shape, a successful retry
+stamping `commissionChargedAt`, a repeated failure re-audit-logging with `retry: true`, and one
+booking's failure not blocking the rest of the batch. `worker-profiles.service.spec.ts`/
+`public-workers.service.spec.ts` assert the new `financialStatus: ACTIVE` gate on every eligibility
+query.
+
 ## MongoDB options
 
 ### Option A: Atlas (no local install)
@@ -1343,7 +1498,8 @@ curl -X POST http://localhost:3000/api/v1/countries/admin \
 Auth endpoints are listed under "Authentication" above; worker/admin/audit-log endpoints under
 "Worker verification" above; service catalog/pricing/quote endpoints under "Service catalog and
 pricing" above; booking/availability-window/slots endpoints under "Bookings" above;
-presence/offers endpoints under "Instant bookings and broadcast matching" above. Countries/cities:
+presence/offers endpoints under "Instant bookings and broadcast matching" above; wallet/top-up/ledger
+endpoints under "Worker wallet, commission collection and suspension" above. Countries/cities:
 
 | Method | Path | Auth | Notes |
 |---|---|---|---|
@@ -1581,3 +1737,26 @@ generic "the worker"/"العاملة"). The per-connection socket rate limiter i
 multi-instance deployment it limits each instance independently, not a connection's total rate
 across reconnects to a different instance (the authoritative, cross-instance-correct check for
 location updates specifically is still `LocationTrackingService`'s own database-backed throttle).
+
+### Phase 8 — what shipped, and what didn't
+
+Delivered: everything under "Worker wallet, commission collection and suspension" above — the
+append-only, idempotent `wallet_entries` ledger with no update/delete path and `REVERSAL` as the only
+correction mechanism; automatic commission collection on booking completion from the booking's
+**final** pricing, resilient to a ledger failure (the booking still completes; a retry sweep catches
+it); a configurable-per-country, zero-by-default worker cancellation penalty; automatic
+suspension/reinstatement on the negative-balance floor, structurally independent from the Phase 3
+disciplinary suspension; a financially suspended worker excluded from matching/booking/the public
+list but never from finishing a job already in progress; the full worker-facing and admin wallet
+endpoint surface, including admin top-up/adjustment/reversal/manual-reinstatement, each audit-logged;
+and `npm run wallet:verify` as the drift detector that makes the ledger's "authoritative over the
+cached balance" claim actually checkable.
+
+Deliberately deferred: self-service top-up (a payment-gateway integration) — every top-up is still
+admin-recorded against a real-world reference. Collecting a customer's cancellation fee is likewise
+out of scope — cash payments, no card on file, nothing to charge against. No admin UI/dashboard beyond
+the paginated endpoints (no aggregate "total commission collected this month" report). The
+non-transactional `$inc`-then-insert compensation pattern in `recordEntry` has one documented narrow
+gap — a crash between the two steps — caught only after the fact by `wallet:verify`, not prevented;
+closing that gap for real would mean requiring a replica-set MongoDB (Atlas already is one) even for
+local development, which this phase deliberately didn't force.

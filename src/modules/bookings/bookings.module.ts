@@ -13,6 +13,7 @@ import { PricingModule } from '../pricing/pricing.module';
 import { ServicesModule } from '../services/services.module';
 import { UsersModule } from '../users/users.module';
 import { UsersService } from '../users/users.service';
+import { WalletsModule } from '../wallets/wallets.module';
 import { WorkersModule } from '../workers/workers.module';
 import { WorkerProfilesService } from '../workers/worker-profiles.service';
 import { AdminBookingsController } from './admin-bookings.controller';
@@ -21,6 +22,7 @@ import { NearestAvailableAssignmentStrategy } from './assignment/nearest-availab
 import { BookingExpiryService } from './booking-expiry.service';
 import { BookingsController } from './bookings.controller';
 import { BookingsService } from './bookings.service';
+import { CommissionChargeRetrySweepService } from './commission-charge-retry-sweep.service';
 import { InstantMatchingSweepService } from './instant-matching-sweep.service';
 import { InstantMatchingService } from './instant-matching.service';
 import { LocationTrackingService } from './location-tracking.service';
@@ -52,6 +54,7 @@ import { WorkerSlotsController } from './worker-slots.controller';
     UsersModule,
     AuditLogModule,
     NotificationsModule,
+    WalletsModule,
   ],
   // WorkerBookingsController ('workers/me/bookings/...'), WorkerOffersController
   // ('workers/me/offers/...'), and WorkerSlotsController ('workers/:id/slots')
@@ -75,6 +78,7 @@ import { WorkerSlotsController } from './worker-slots.controller';
     ScheduledReminderSweepService,
     LocationTrackingService,
     LocationTrailPurgeSweepService,
+    CommissionChargeRetrySweepService,
     {
       provide: BOOKING_NOTIFIER,
       // ModuleRef, not RealtimeGateway directly — RealtimeGateway lives in

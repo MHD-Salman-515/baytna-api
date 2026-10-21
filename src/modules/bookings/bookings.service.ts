@@ -3,6 +3,7 @@ import {
   ConflictException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
@@ -22,6 +23,7 @@ import { PricingService } from '../pricing/pricing.service';
 import { roundHalfUpDivide } from '../pricing/round-half-up-divide';
 import { ServicesService } from '../services/services.service';
 import { UsersService } from '../users/users.service';
+import { WalletsService } from '../wallets/wallets.service';
 import { WorkerAvailabilityService } from '../workers/worker-availability.service';
 import { WorkerProfilesService } from '../workers/worker-profiles.service';
 import { WorkerServicesService } from '../workers/worker-services.service';
@@ -59,6 +61,8 @@ const MAX_BOOKING_NUMBER_ATTEMPTS = 5;
 
 @Injectable()
 export class BookingsService {
+  private readonly logger = new Logger(BookingsService.name);
+
   constructor(
     @InjectModel(Booking.name) private readonly bookingModel: Model<BookingDocument>,
     @InjectModel(BookingOffer.name) private readonly bookingOfferModel: Model<BookingOfferDocument>,
@@ -78,6 +82,7 @@ export class BookingsService {
     private readonly directAssignmentStrategy: DirectAssignmentStrategy,
     private readonly nearestAvailableAssignmentStrategy: NearestAvailableAssignmentStrategy,
     private readonly locationTrackingService: LocationTrackingService,
+    private readonly walletsService: WalletsService,
     @Inject(BOOKING_NOTIFIER) private readonly notifier: BookingNotifier,
   ) {}
 
@@ -548,6 +553,7 @@ export class BookingsService {
 
     await booking.save();
     await this.locationTrackingService.markTerminated(bookingId);
+    await this.chargeCommissionSafely(booking);
 
     await this.notifier.notify({
       type: NotificationEventType.JOB_COMPLETED,
@@ -557,6 +563,38 @@ export class BookingsService {
     });
 
     return booking;
+  }
+
+  /**
+   * The booking has already been saved as COMPLETED by the time this runs —
+   * a ledger failure here must never undo that or propagate to the caller.
+   * On failure it's logged and audit-logged (actorUserId null — this is a
+   * system action) with commissionChargedAt left null, which is exactly
+   * what CommissionChargeRetrySweepService polls for.
+   */
+  private async chargeCommissionSafely(booking: BookingDocument): Promise<void> {
+    try {
+      await this.walletsService.chargeCommission(
+        booking.id as string,
+        booking.workerProfileId!.toString(),
+        booking.finalPricing!.commissionAmount,
+        booking.finalPricing!.currency,
+      );
+      booking.commissionChargedAt = new Date();
+      await booking.save();
+    } catch (error) {
+      this.logger.error(
+        `Failed to charge commission for completed booking ${booking.id}`,
+        (error as Error).stack,
+      );
+      await this.auditLogService.record({
+        actorUserId: null,
+        action: AuditAction.WALLET_COMMISSION_CHARGE_FAILED,
+        targetType: 'Booking',
+        targetId: booking.id as string,
+        metadata: { error: (error as Error).message },
+      });
+    }
   }
 
   async cancelByCustomer(
@@ -602,7 +640,16 @@ export class BookingsService {
     return booking;
   }
 
-  /** No fee is charged to the customer when the worker cancels after accepting — it's only recorded (feeds her reliability score in a later phase). */
+  /**
+   * No fee is charged to the customer when the worker cancels after
+   * accepting — it's only recorded (feeds her reliability score in a later
+   * phase). She may, per Phase 8, owe a CANCELLATION_FEE to her own wallet
+   * instead — a country-configured penalty, zero by default. A wallet
+   * failure here is logged but never blocks the cancellation itself; unlike
+   * a completed job's commission, there's no retry sweep for this penalty
+   * (it isn't revenue the booking has already earned — a missed charge
+   * here is a lenience, not a liability).
+   */
   async cancelByWorker(
     workerProfileId: string,
     actorUserId: string,
@@ -621,6 +668,21 @@ export class BookingsService {
     };
     await booking.save();
     await this.locationTrackingService.markTerminated(bookingId);
+
+    try {
+      const country = await this.countriesService.findActiveById(booking.countryId.toString());
+      await this.walletsService.chargeCancellationPenalty(
+        bookingId,
+        workerProfileId,
+        country.walletPolicy.workerCancellationPenaltyAmount,
+        booking.pricing!.currency,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to charge worker cancellation penalty for booking ${bookingId}`,
+        (error as Error).stack,
+      );
+    }
 
     await this.notifier.notify({
       type: NotificationEventType.BOOKING_CANCELLED,

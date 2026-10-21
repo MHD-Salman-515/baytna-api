@@ -13,6 +13,7 @@ import { NotificationEventType } from '../notifications/notification-event';
 import { PricingService } from '../pricing/pricing.service';
 import { ServicesService } from '../services/services.service';
 import { UsersService } from '../users/users.service';
+import { WalletsService } from '../wallets/wallets.service';
 import { WorkerAvailabilityService } from '../workers/worker-availability.service';
 import { WorkerProfilesService } from '../workers/worker-profiles.service';
 import { WorkerServicesService } from '../workers/worker-services.service';
@@ -37,10 +38,12 @@ function chainable(resolvedValue: unknown) {
 function fakeBooking(overrides: Record<string, unknown> = {}) {
   const booking: Record<string, unknown> = {
     _id: bookingId,
+    id: bookingId,
     status: BookingStatus.PENDING_WORKER,
     scheduledFor: new Date('2026-12-01T10:00:00.000Z'),
     estimatedDurationMinutes: 120,
     countryId: 'country-1',
+    workerProfileId: 'worker-profile-1',
     workerServiceId: 'worker-service-1',
     pricing: {
       pricingType: PricingType.HOURLY,
@@ -105,6 +108,7 @@ describe('BookingsService', () => {
   let nearestAvailableAssignmentStrategy: { resolveWorker: jest.Mock };
   let notifier: { notify: jest.Mock; notifyOffer: jest.Mock };
   let locationTrackingService: { recordArrivalDistance: jest.Mock; markTerminated: jest.Mock };
+  let walletsService: { chargeCommission: jest.Mock; chargeCancellationPenalty: jest.Mock };
 
   const workerServiceId = 'worker-service-1';
   const cityId = 'city-1';
@@ -136,6 +140,11 @@ describe('BookingsService', () => {
       interBookingBufferMinutes: 30,
       freeCancellationHours: 24,
       cancellationFeeBasisPoints: 2000,
+    },
+    walletPolicy: {
+      negativeBalanceFloor: -5000,
+      lowBalanceWarningThreshold: -2000,
+      workerCancellationPenaltyAmount: 0,
     },
   };
 
@@ -196,6 +205,10 @@ describe('BookingsService', () => {
       recordArrivalDistance: jest.fn().mockResolvedValue(undefined),
       markTerminated: jest.fn().mockResolvedValue(undefined),
     };
+    walletsService = {
+      chargeCommission: jest.fn().mockResolvedValue(undefined),
+      chargeCancellationPenalty: jest.fn().mockResolvedValue(undefined),
+    };
     instantMatchingService = {
       startSearch: jest.fn().mockResolvedValue(undefined),
       markOutstandingOffersStale: jest.fn().mockResolvedValue(undefined),
@@ -232,6 +245,7 @@ describe('BookingsService', () => {
           useValue: nearestAvailableAssignmentStrategy,
         },
         { provide: LocationTrackingService, useValue: locationTrackingService },
+        { provide: WalletsService, useValue: walletsService },
         { provide: BOOKING_NOTIFIER, useValue: notifier },
       ],
     }).compile();
@@ -617,6 +631,43 @@ describe('BookingsService', () => {
 
       expect(booking.finalPricing).toEqual(fixedPricing);
     });
+
+    it('charges the commission from the FINAL pricing and stamps commissionChargedAt', async () => {
+      const startedAt = new Date(Date.now() - 3 * 60 * 60 * 1000);
+      const booking = fakeBooking({ status: BookingStatus.IN_PROGRESS, startedAt });
+      bookingModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(booking) });
+
+      await service.complete(workerProfileId, bookingId);
+
+      const finalPricing = booking.finalPricing as Record<string, unknown>;
+      expect(walletsService.chargeCommission).toHaveBeenCalledWith(
+        bookingId,
+        'worker-profile-1',
+        finalPricing.commissionAmount,
+        finalPricing.currency,
+      );
+      expect(booking.commissionChargedAt).toBeInstanceOf(Date);
+    });
+
+    it('still completes — and leaves commissionChargedAt null — when the ledger charge fails, but audit-logs the failure', async () => {
+      const startedAt = new Date(Date.now() - 3 * 60 * 60 * 1000);
+      const booking = fakeBooking({ status: BookingStatus.IN_PROGRESS, startedAt });
+      bookingModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(booking) });
+      walletsService.chargeCommission.mockRejectedValue(new Error('wallet unreachable'));
+
+      const result = await service.complete(workerProfileId, bookingId);
+
+      expect(result.status).toBe(BookingStatus.COMPLETED);
+      expect(booking.commissionChargedAt).toBeUndefined();
+      expect(auditLogService.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actorUserId: null,
+          action: AuditAction.WALLET_COMMISSION_CHARGE_FAILED,
+          targetType: 'Booking',
+          targetId: bookingId,
+        }),
+      );
+    });
   });
 
   describe('acceptOffer', () => {
@@ -835,6 +886,53 @@ describe('BookingsService', () => {
         }),
       );
       expect(locationTrackingService.markTerminated).toHaveBeenCalledWith(bookingId);
+    });
+
+    it('charges the country-configured worker cancellation penalty (zero by default)', async () => {
+      const booking = fakeBooking({ status: BookingStatus.ACCEPTED });
+      bookingModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(booking) });
+
+      await service.cancelByWorker(workerProfileId, 'worker-user-1', bookingId, 'Family emergency');
+
+      expect(walletsService.chargeCancellationPenalty).toHaveBeenCalledWith(
+        bookingId,
+        workerProfileId,
+        0,
+        'SYP',
+      );
+    });
+
+    it('charges a non-zero penalty when the country configures one', async () => {
+      countriesService.findActiveById.mockResolvedValue({
+        ...country,
+        walletPolicy: { ...country.walletPolicy, workerCancellationPenaltyAmount: 500 },
+      });
+      const booking = fakeBooking({ status: BookingStatus.ACCEPTED });
+      bookingModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(booking) });
+
+      await service.cancelByWorker(workerProfileId, 'worker-user-1', bookingId, 'Family emergency');
+
+      expect(walletsService.chargeCancellationPenalty).toHaveBeenCalledWith(
+        bookingId,
+        workerProfileId,
+        500,
+        'SYP',
+      );
+    });
+
+    it('still cancels successfully when the wallet charge fails', async () => {
+      walletsService.chargeCancellationPenalty.mockRejectedValue(new Error('wallet unreachable'));
+      const booking = fakeBooking({ status: BookingStatus.ACCEPTED });
+      bookingModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(booking) });
+
+      const result = await service.cancelByWorker(
+        workerProfileId,
+        'worker-user-1',
+        bookingId,
+        'Family emergency',
+      );
+
+      expect(result.status).toBe(BookingStatus.CANCELLED);
     });
 
     it('notifies the already-assigned worker when the customer cancels a committed booking', async () => {
