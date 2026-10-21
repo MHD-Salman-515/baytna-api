@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { BaseSchema, baseSchemaOptions } from '../../../common/schemas/base.schema';
 import { Role } from '../../../common/enums/role.enum';
 
@@ -16,7 +16,9 @@ export type ShareTripTokenDocument = HydratedDocument<ShareTripToken>;
  */
 @Schema({ collection: 'share_trip_tokens', ...baseSchemaOptions })
 export class ShareTripToken extends BaseSchema {
-  @Prop({ type: Types.ObjectId, ref: 'Booking', required: true, index: true })
+  // MongooseSchema.Types.ObjectId, not the bare `Types.ObjectId` value class
+  // — see Review schema's own doc comment on why @nestjs/mongoose mistypes it.
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Booking', required: true, index: true })
   bookingId!: Types.ObjectId;
 
   // Opaque, unguessable (crypto.randomBytes(32).toString('hex')) — the only
@@ -24,7 +26,7 @@ export class ShareTripToken extends BaseSchema {
   @Prop({ type: String, required: true, unique: true })
   token!: string;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
   createdByUserId!: Types.ObjectId;
 
   @Prop({ type: String, enum: [Role.CUSTOMER, Role.WORKER], required: true })
@@ -33,7 +35,7 @@ export class ShareTripToken extends BaseSchema {
   @Prop({ type: Date, default: null })
   revokedAt!: Date | null;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', default: null })
   revokedBy!: Types.ObjectId | null;
 }
 

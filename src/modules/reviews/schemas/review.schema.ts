@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { BaseSchema, baseSchemaOptions } from '../../../common/schemas/base.schema';
 import { LocalizedText, LocalizedTextSchema } from '../../../common/schemas/localized-text.schema';
 import { Role } from '../../../common/enums/role.enum';
@@ -8,10 +8,21 @@ export type ReviewDocument = HydratedDocument<Review>;
 
 @Schema({ collection: 'reviews', ...baseSchemaOptions })
 export class Review extends BaseSchema {
-  @Prop({ type: Types.ObjectId, ref: 'Booking', required: true, index: true })
+  // `type: MongooseSchema.Types.ObjectId`, NOT `mongoose.Types.ObjectId` —
+  // @nestjs/mongoose's SchemaFactory doesn't recognize the latter as a
+  // SchemaType (it isn't one; `Types.ObjectId` is the BSON value class used
+  // to *construct* ids, not the Mongoose SchemaType used to *declare* a
+  // field). Passed that way, it silently collapses to an empty nested
+  // schema (Mixed), and every id on this schema would be stored and
+  // compared as a plain string — invisible in ordinary `.find()`/`.populate()`
+  // queries (which stay internally consistent either way) but wrong the
+  // moment anything does a real `new Types.ObjectId(x)` match in a raw
+  // aggregation pipeline, as ReviewsService/BookingsService's rating
+  // aggregations do.
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Booking', required: true, index: true })
   bookingId!: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
   authorId!: Types.ObjectId;
 
   // Which side of the booking wrote this review — CUSTOMER or WORKER, never ADMIN.
@@ -23,7 +34,7 @@ export class Review extends BaseSchema {
   // WorkerProfile id being rated (matches WorkerProfile.rating's own
   // aggregation key directly); a WORKER's review's subjectId is the
   // customer's User id (customers have no separate "profile" document).
-  @Prop({ type: Types.ObjectId, required: true, index: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, required: true, index: true })
   subjectId!: Types.ObjectId;
 
   @Prop({ type: Number, required: true, min: 1, max: 5 })
@@ -41,7 +52,7 @@ export class Review extends BaseSchema {
   @Prop({ type: LocalizedTextSchema, default: null })
   hiddenReason!: LocalizedText | null;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', default: null })
   hiddenBy!: Types.ObjectId | null;
 
   @Prop({ type: Date, default: null })

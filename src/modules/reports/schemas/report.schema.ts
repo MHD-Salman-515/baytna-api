@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { BaseSchema, baseSchemaOptions } from '../../../common/schemas/base.schema';
 import { Role } from '../../../common/enums/role.enum';
 
@@ -64,7 +64,9 @@ export const ReportAttachmentSchema = SchemaFactory.createForClass(ReportAttachm
 // non-admin viewer. See ReportsService.addInternalNote.
 @Schema({ _id: false })
 export class ReportInternalNote {
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true })
+  // MongooseSchema.Types.ObjectId, not the bare `Types.ObjectId` value class
+  // — see Review schema's own doc comment on why @nestjs/mongoose mistypes it.
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
   authorId!: Types.ObjectId;
 
   @Prop({ type: String, required: true, trim: true, maxlength: 2000 })
@@ -77,7 +79,7 @@ export const ReportInternalNoteSchema = SchemaFactory.createForClass(ReportInter
 
 @Schema({ collection: 'reports', ...baseSchemaOptions })
 export class Report extends BaseSchema {
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
   reporterId!: Types.ObjectId;
 
   @Prop({ type: String, enum: [Role.CUSTOMER, Role.WORKER], required: true })
@@ -87,12 +89,12 @@ export class Report extends BaseSchema {
   subjectType!: ReportSubjectType;
 
   // A User id, a WorkerProfile id, or a Booking id, depending on subjectType.
-  @Prop({ type: Types.ObjectId, required: true, index: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, required: true, index: true })
   subjectId!: Types.ObjectId;
 
   // Set whenever the report concerns a specific booking, regardless of
   // subjectType — lets admins jump straight to the booking either way.
-  @Prop({ type: Types.ObjectId, ref: 'Booking', default: null, index: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Booking', default: null, index: true })
   bookingId!: Types.ObjectId | null;
 
   @Prop({ type: String, enum: ReportCategory, required: true, index: true })
@@ -113,7 +115,7 @@ export class Report extends BaseSchema {
   @Prop({ type: String, enum: ReportStatus, default: ReportStatus.OPEN, index: true })
   status!: ReportStatus;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null, index: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', default: null, index: true })
   assignedTo!: Types.ObjectId | null;
 
   @Prop({ type: [ReportInternalNoteSchema], default: [] })
@@ -125,7 +127,7 @@ export class Report extends BaseSchema {
   @Prop({ type: String, trim: true, default: null })
   resolution!: string | null;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', default: null })
   resolvedBy!: Types.ObjectId | null;
 
   @Prop({ type: Date, default: null })

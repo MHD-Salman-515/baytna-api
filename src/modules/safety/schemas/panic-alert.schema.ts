@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { BaseSchema, baseSchemaOptions } from '../../../common/schemas/base.schema';
 import { GeoPoint, GeoPointSchema } from '../../cities/schemas/city.schema';
 import { Role } from '../../../common/enums/role.enum';
@@ -31,10 +31,13 @@ export const NotifiedContactSnapshotSchema = SchemaFactory.createForClass(Notifi
 
 @Schema({ collection: 'panic_alerts', ...baseSchemaOptions })
 export class PanicAlert extends BaseSchema {
-  @Prop({ type: Types.ObjectId, ref: 'Booking', required: true, index: true })
+  // See Review's own doc comment: @Prop must use MongooseSchema.Types.ObjectId
+  // here, never the bare `Types.ObjectId` value class — @nestjs/mongoose
+  // silently mistypes the latter as Mixed.
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Booking', required: true, index: true })
   bookingId!: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
   triggeredByUserId!: Types.ObjectId;
 
   @Prop({ type: String, enum: [Role.CUSTOMER, Role.WORKER], required: true })
@@ -52,13 +55,13 @@ export class PanicAlert extends BaseSchema {
   @Prop({ type: [NotifiedContactSnapshotSchema], default: [] })
   contactsToNotify!: NotifiedContactSnapshot[];
 
-  @Prop({ type: [Types.ObjectId], ref: 'User', default: [] })
+  @Prop({ type: [MongooseSchema.Types.ObjectId], ref: 'User', default: [] })
   notifiedAdminIds!: Types.ObjectId[];
 
   @Prop({ type: String, enum: PanicAlertStatus, default: PanicAlertStatus.OPEN, index: true })
   status!: PanicAlertStatus;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', default: null })
   resolvedBy!: Types.ObjectId | null;
 
   @Prop({ type: Date, default: null })
