@@ -158,6 +158,7 @@ export class ReportsService {
     if (query.status) filter.status = query.status;
     if (query.category) filter.category = query.category;
     if (query.assignedTo) filter.assignedTo = query.assignedTo;
+    if (query.subjectId) filter.subjectId = query.subjectId;
 
     const [data, total] = await Promise.all([
       this.reportModel

@@ -65,6 +65,11 @@ const NON_TERMINAL_STATUSES = [
 
 const MAX_BOOKING_NUMBER_ATTEMPTS = 5;
 
+/** Escapes regex metacharacters in admin-supplied search text before it's interpolated into a $regex filter. */
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 @Injectable()
 export class BookingsService {
   private readonly logger = new Logger(BookingsService.name);
@@ -491,6 +496,144 @@ export class BookingsService {
 
   async getForAdmin(bookingId: string): Promise<BookingDocument> {
     return this.loadOrThrow({ _id: this.assertValidId(bookingId) });
+  }
+
+  /** Phase 9 admin search — bookingNumber is the only field this app lets admins search bookings by directly. */
+  async searchByBookingNumberPrefix(prefix: string, limit = 20): Promise<BookingDocument[]> {
+    return this.bookingModel
+      .find({ bookingNumber: { $regex: `^${escapeRegExp(prefix)}`, $options: 'i' } })
+      .limit(limit)
+      .exec();
+  }
+
+  /** Phase 9 admin dashboard — one aggregation pass, never bookings loaded into memory to count them in JS. */
+  async getStatusCountsSince(since: Date): Promise<Record<string, number>> {
+    const rows = await this.bookingModel.aggregate<{ _id: BookingStatus; count: number }>([
+      { $match: { createdAt: { $gte: since } } },
+      { $group: { _id: '$status', count: { $sum: 1 } } },
+    ]);
+    return Object.fromEntries(rows.map((row) => [row._id, row.count]));
+  }
+
+  /** Phase 9 admin dashboard — INSTANT requests that ended NO_WORKER_FOUND, as a share of all INSTANT requests since `since`. */
+  async getInstantMatchingFailureRate(
+    since: Date,
+  ): Promise<{ totalInstant: number; noWorkerFound: number; ratePercent: number }> {
+    const [row] = await this.bookingModel.aggregate<{
+      totalInstant: number;
+      noWorkerFound: number;
+    }>([
+      { $match: { type: BookingType.INSTANT, createdAt: { $gte: since } } },
+      {
+        $group: {
+          _id: null,
+          totalInstant: { $sum: 1 },
+          noWorkerFound: {
+            $sum: { $cond: [{ $eq: ['$status', BookingStatus.NO_WORKER_FOUND] }, 1, 0] },
+          },
+        },
+      },
+    ]);
+    const totalInstant = row?.totalInstant ?? 0;
+    const noWorkerFound = row?.noWorkerFound ?? 0;
+    return {
+      totalInstant,
+      noWorkerFound,
+      ratePercent: totalInstant === 0 ? 0 : Math.round((noWorkerFound / totalInstant) * 1000) / 10,
+    };
+  }
+
+  /**
+   * Phase 9 operational metrics — average accept latency, completion rate,
+   * and cancellation rate by party, all from one aggregation pass against
+   * bookings created since `since`. "Completion rate" and "cancellation
+   * rate" are both out of every booking in the window (not just terminal
+   * ones) — a booking still in flight simply counts toward neither yet.
+   */
+  async getOperationalMetrics(since: Date): Promise<{
+    totalBookings: number;
+    averageTimeToAcceptMinutes: number | null;
+    completionRate: number;
+    cancellationRateByCustomer: number;
+    cancellationRateByWorker: number;
+  }> {
+    const [row] = await this.bookingModel.aggregate<{
+      total: number;
+      completed: number;
+      cancelledByCustomer: number;
+      cancelledByWorker: number;
+      acceptedCount: number;
+      totalAcceptLatencyMs: number;
+    }>([
+      { $match: { createdAt: { $gte: since } } },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: 1 },
+          completed: { $sum: { $cond: [{ $eq: ['$status', BookingStatus.COMPLETED] }, 1, 0] } },
+          cancelledByCustomer: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ['$status', BookingStatus.CANCELLED] },
+                    { $eq: ['$cancellation.byRole', Role.CUSTOMER] },
+                  ],
+                },
+                1,
+                0,
+              ],
+            },
+          },
+          cancelledByWorker: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ['$status', BookingStatus.CANCELLED] },
+                    { $eq: ['$cancellation.byRole', Role.WORKER] },
+                  ],
+                },
+                1,
+                0,
+              ],
+            },
+          },
+          acceptedCount: { $sum: { $cond: [{ $ne: ['$acceptedAt', null] }, 1, 0] } },
+          totalAcceptLatencyMs: {
+            $sum: {
+              $cond: [
+                { $ne: ['$acceptedAt', null] },
+                { $subtract: ['$acceptedAt', '$createdAt'] },
+                0,
+              ],
+            },
+          },
+        },
+      },
+    ]);
+
+    const total = row?.total ?? 0;
+    if (total === 0) {
+      return {
+        totalBookings: 0,
+        averageTimeToAcceptMinutes: null,
+        completionRate: 0,
+        cancellationRateByCustomer: 0,
+        cancellationRateByWorker: 0,
+      };
+    }
+
+    return {
+      totalBookings: total,
+      averageTimeToAcceptMinutes:
+        row!.acceptedCount === 0
+          ? null
+          : Math.round(row!.totalAcceptLatencyMs / row!.acceptedCount / 60_000),
+      completionRate: Math.round((row!.completed / total) * 1000) / 10,
+      cancellationRateByCustomer: Math.round((row!.cancelledByCustomer / total) * 1000) / 10,
+      cancellationRateByWorker: Math.round((row!.cancelledByWorker / total) * 1000) / 10,
+    };
   }
 
   async accept(workerProfileId: string, bookingId: string): Promise<BookingDocument> {

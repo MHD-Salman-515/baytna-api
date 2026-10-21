@@ -24,6 +24,7 @@ describe('WorkerProfilesService', () => {
     find: jest.Mock;
     countDocuments: jest.Mock;
     updateOne: jest.Mock;
+    aggregate: jest.Mock;
   };
   let countriesService: { findActiveById: jest.Mock };
   let workerDocumentsService: { hasAllRequiredDocuments: jest.Mock };
@@ -44,6 +45,7 @@ describe('WorkerProfilesService', () => {
       find: jest.fn(),
       countDocuments: jest.fn(),
       updateOne: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue({}) }),
+      aggregate: jest.fn().mockResolvedValue([]),
     };
     countriesService = { findActiveById: jest.fn().mockResolvedValue({ code: 'SY' }) };
     workerDocumentsService = { hasAllRequiredDocuments: jest.fn() };
@@ -520,6 +522,26 @@ describe('WorkerProfilesService', () => {
       await service.setRating('profile-1', 4.7);
 
       expect(profileModel.updateOne).toHaveBeenCalledWith({ _id: 'profile-1' }, { rating: 4.7 });
+    });
+  });
+
+  describe('getAverageRating', () => {
+    it('excludes workers with zero completed bookings from the average', async () => {
+      profileModel.aggregate.mockResolvedValue([{ average: 4.26 }]);
+
+      const result = await service.getAverageRating();
+
+      expect(profileModel.aggregate).toHaveBeenCalledWith([
+        { $match: { completedBookings: { $gt: 0 } } },
+        { $group: { _id: null, average: { $avg: '$rating' } } },
+      ]);
+      expect(result).toBe(4.3);
+    });
+
+    it('returns 0 when no worker has completed a booking yet', async () => {
+      profileModel.aggregate.mockResolvedValue([]);
+
+      await expect(service.getAverageRating()).resolves.toBe(0);
     });
   });
 });

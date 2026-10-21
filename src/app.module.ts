@@ -28,6 +28,7 @@ import { WalletsModule } from './modules/wallets/wallets.module';
 import { ReviewsModule } from './modules/reviews/reviews.module';
 import { SafetyModule } from './modules/safety/safety.module';
 import { ReportsModule } from './modules/reports/reports.module';
+import { AdminConsoleModule } from './modules/admin-console/admin-console.module';
 
 @Module({
   imports: [
@@ -86,6 +87,7 @@ import { ReportsModule } from './modules/reports/reports.module';
     ReviewsModule,
     SafetyModule,
     ReportsModule,
+    AdminConsoleModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

@@ -260,6 +260,20 @@ export class WorkerProfilesService {
     await this.profileModel.updateOne({ _id: workerProfileId }, { rating }).exec();
   }
 
+  /**
+   * Phase 9 operational metrics — platform-wide average of the denormalized
+   * per-worker `rating`, restricted to workers who have actually completed
+   * at least one booking (a brand-new profile's rating of 0 would otherwise
+   * drag the average down for having never been reviewed, not for being bad).
+   */
+  async getAverageRating(): Promise<number> {
+    const [row] = await this.profileModel.aggregate<{ average: number }>([
+      { $match: { completedBookings: { $gt: 0 } } },
+      { $group: { _id: null, average: { $avg: '$rating' } } },
+    ]);
+    return row ? Math.round(row.average * 10) / 10 : 0;
+  }
+
   async reviewWorker(
     adminUserId: string,
     workerProfileId: string,

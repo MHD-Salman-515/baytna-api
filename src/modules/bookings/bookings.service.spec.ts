@@ -83,6 +83,7 @@ describe('BookingsService', () => {
     create: jest.Mock;
     countDocuments: jest.Mock;
     exists: jest.Mock;
+    aggregate: jest.Mock;
   };
   let bookingOfferModel: { find: jest.Mock };
   let reviewModel: { aggregate: jest.Mock };
@@ -173,6 +174,7 @@ describe('BookingsService', () => {
       create: jest.fn(),
       countDocuments: jest.fn(),
       exists: jest.fn(),
+      aggregate: jest.fn().mockResolvedValue([]),
     };
     bookingOfferModel = { find: jest.fn() };
     reviewModel = { aggregate: jest.fn().mockResolvedValue([]) };
@@ -532,6 +534,88 @@ describe('BookingsService', () => {
       await expect(service.resolveOwnParty('stranger', bookingId)).rejects.toThrow(
         NotFoundException,
       );
+    });
+  });
+
+  describe('searchByBookingNumberPrefix', () => {
+    it('escapes regex metacharacters before building the filter', async () => {
+      bookingModel.find.mockReturnValue(chainable([]));
+
+      await service.searchByBookingNumberPrefix('BK-A.B*');
+
+      expect(bookingModel.find).toHaveBeenCalledWith({
+        bookingNumber: { $regex: '^BK-A\\.B\\*', $options: 'i' },
+      });
+    });
+  });
+
+  describe('getStatusCountsSince', () => {
+    it('returns one aggregated count per status', async () => {
+      bookingModel.aggregate.mockResolvedValue([
+        { _id: BookingStatus.COMPLETED, count: 5 },
+        { _id: BookingStatus.CANCELLED, count: 2 },
+      ]);
+
+      const result = await service.getStatusCountsSince(new Date());
+
+      expect(result).toEqual({ [BookingStatus.COMPLETED]: 5, [BookingStatus.CANCELLED]: 2 });
+    });
+  });
+
+  describe('getInstantMatchingFailureRate', () => {
+    it('computes the NO_WORKER_FOUND share of INSTANT bookings', async () => {
+      bookingModel.aggregate.mockResolvedValue([{ totalInstant: 20, noWorkerFound: 3 }]);
+
+      const result = await service.getInstantMatchingFailureRate(new Date());
+
+      expect(result).toEqual({ totalInstant: 20, noWorkerFound: 3, ratePercent: 15 });
+    });
+
+    it('returns a zero rate (not NaN) when there were no INSTANT requests at all', async () => {
+      bookingModel.aggregate.mockResolvedValue([]);
+
+      const result = await service.getInstantMatchingFailureRate(new Date());
+
+      expect(result).toEqual({ totalInstant: 0, noWorkerFound: 0, ratePercent: 0 });
+    });
+  });
+
+  describe('getOperationalMetrics', () => {
+    it('computes completion rate, cancellation rate by party, and average accept latency', async () => {
+      bookingModel.aggregate.mockResolvedValue([
+        {
+          total: 100,
+          completed: 60,
+          cancelledByCustomer: 10,
+          cancelledByWorker: 5,
+          acceptedCount: 80,
+          totalAcceptLatencyMs: 80 * 5 * 60_000, // 5 minutes average
+        },
+      ]);
+
+      const result = await service.getOperationalMetrics(new Date());
+
+      expect(result).toEqual({
+        totalBookings: 100,
+        averageTimeToAcceptMinutes: 5,
+        completionRate: 60,
+        cancellationRateByCustomer: 10,
+        cancellationRateByWorker: 5,
+      });
+    });
+
+    it('returns zeroed-out, non-null-dividing-by-zero metrics when there are no bookings in the window', async () => {
+      bookingModel.aggregate.mockResolvedValue([]);
+
+      const result = await service.getOperationalMetrics(new Date());
+
+      expect(result).toEqual({
+        totalBookings: 0,
+        averageTimeToAcceptMinutes: null,
+        completionRate: 0,
+        cancellationRateByCustomer: 0,
+        cancellationRateByWorker: 0,
+      });
     });
   });
 

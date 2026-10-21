@@ -82,6 +82,22 @@ export class UsersService {
     return user;
   }
 
+  /** Phase 9 admin search — matches phone (substring) or first/last name (case-insensitive substring), never a full user dump. */
+  async searchByPhoneOrName(term: string, limit = 20): Promise<UserDocument[]> {
+    const pattern = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return this.userModel
+      .find({
+        isDeleted: false,
+        $or: [
+          { phone: { $regex: pattern, $options: 'i' } },
+          { 'profile.firstName': { $regex: pattern, $options: 'i' } },
+          { 'profile.lastName': { $regex: pattern, $options: 'i' } },
+        ],
+      })
+      .limit(limit)
+      .exec();
+  }
+
   /** Phase 9: every currently-active admin, for fan-out notifications (panic alerts) — never a single hardcoded recipient. */
   async findAdminIds(): Promise<string[]> {
     const admins = await this.userModel

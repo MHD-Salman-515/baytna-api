@@ -194,6 +194,25 @@ describe('UsersService', () => {
     });
   });
 
+  describe('searchByPhoneOrName', () => {
+    it('matches on phone or first/last name, excludes soft-deleted users, and escapes regex metacharacters', async () => {
+      model.find.mockReturnValue({
+        limit: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue([]) }),
+      });
+
+      await service.searchByPhoneOrName("O'Brien.*");
+
+      expect(model.find).toHaveBeenCalledWith({
+        isDeleted: false,
+        $or: [
+          { phone: { $regex: "O'Brien\\.\\*", $options: 'i' } },
+          { 'profile.firstName': { $regex: "O'Brien\\.\\*", $options: 'i' } },
+          { 'profile.lastName': { $regex: "O'Brien\\.\\*", $options: 'i' } },
+        ],
+      });
+    });
+  });
+
   describe('findAdminIds', () => {
     it('queries every active, non-deleted ADMIN and returns just the ids', async () => {
       const select = jest.fn().mockReturnValue({
