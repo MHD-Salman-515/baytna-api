@@ -38,7 +38,8 @@ export class PublicWorkersService {
   async findMany(query: FindPublicWorkersQueryDto): Promise<PaginatedResult<PublicWorkerProfile>> {
     const filter: Record<string, unknown> = {
       verificationStatus: VerificationStatus.APPROVED,
-      financialStatus: FinancialStatus.ACTIVE,
+      // $ne SUSPENDED, not $eq ACTIVE — see WorkerProfilesService.findApprovedById's comment.
+      financialStatus: { $ne: FinancialStatus.SUSPENDED },
       isAvailable: true,
       isDeleted: false,
     };
@@ -102,7 +103,7 @@ export class PublicWorkersService {
       .findOne({
         _id: workerProfileId,
         verificationStatus: VerificationStatus.APPROVED,
-        financialStatus: FinancialStatus.ACTIVE,
+        financialStatus: { $ne: FinancialStatus.SUSPENDED },
         isAvailable: true,
         isDeleted: false,
       })

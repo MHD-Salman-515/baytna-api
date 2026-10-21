@@ -191,7 +191,11 @@ export class WorkerProfilesService {
       .findOne({
         _id: workerProfileId,
         verificationStatus: VerificationStatus.APPROVED,
-        financialStatus: FinancialStatus.ACTIVE,
+        // $ne SUSPENDED, not $eq ACTIVE — a profile created before this field
+        // existed has no financialStatus stored at all, and a strict-equality
+        // match would silently exclude her forever without a backfill
+        // migration. Missing the field is exactly equivalent to ACTIVE here.
+        financialStatus: { $ne: FinancialStatus.SUSPENDED },
         isAvailable: true,
         isDeleted: false,
       })
@@ -217,7 +221,8 @@ export class WorkerProfilesService {
       .find({
         _id: { $in: workerProfileIds },
         verificationStatus: VerificationStatus.APPROVED,
-        financialStatus: FinancialStatus.ACTIVE,
+        // See findApprovedById's comment on $ne SUSPENDED vs $eq ACTIVE.
+        financialStatus: { $ne: FinancialStatus.SUSPENDED },
         isAvailable: true,
         isDeleted: false,
         serviceAreas: cityId,

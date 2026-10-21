@@ -347,7 +347,7 @@ describe('WorkerProfilesService', () => {
       expect(profileModel.findOne).toHaveBeenCalledWith({
         _id: 'profile-1',
         verificationStatus: VerificationStatus.APPROVED,
-        financialStatus: FinancialStatus.ACTIVE,
+        financialStatus: { $ne: FinancialStatus.SUSPENDED },
         isAvailable: true,
         isDeleted: false,
       });
@@ -477,7 +477,7 @@ describe('WorkerProfilesService', () => {
       expect(profileModel.find).toHaveBeenCalledWith({
         _id: { $in: ['worker-1', 'worker-2', 'worker-3'] },
         verificationStatus: VerificationStatus.APPROVED,
-        financialStatus: FinancialStatus.ACTIVE,
+        financialStatus: { $ne: FinancialStatus.SUSPENDED },
         isAvailable: true,
         isDeleted: false,
         serviceAreas: 'city-1',

@@ -59,7 +59,7 @@ describe('PublicWorkersService', () => {
 
       expect(profileModel.find).toHaveBeenCalledWith({
         verificationStatus: VerificationStatus.APPROVED,
-        financialStatus: FinancialStatus.ACTIVE,
+        financialStatus: { $ne: FinancialStatus.SUSPENDED },
         isAvailable: true,
         isDeleted: false,
       });
