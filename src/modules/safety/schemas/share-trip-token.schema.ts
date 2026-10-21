@@ -9,7 +9,7 @@ export type ShareTripTokenDocument = HydratedDocument<ShareTripToken>;
  * A short-lived, unguessable public capability token — never a booking or
  * user id. Validity is NOT a stored `expiresAt`: it's computed at read time
  * from the booking's own termination timestamp + the configured grace
- * period (see ShareTripService.isValid), so a booking that runs long never
+ * period (see ShareTripService.getPublicView), so a booking that runs long never
  * has its link expire mid-trip just because some fixed TTL elapsed.
  * `ShareTripPurgeSweepService` only tidies up rows that are unambiguously,
  * permanently expired — it is hygiene, not the enforcement mechanism.
@@ -38,5 +38,3 @@ export class ShareTripToken extends BaseSchema {
 }
 
 export const ShareTripTokenSchema = SchemaFactory.createForClass(ShareTripToken);
-
-ShareTripTokenSchema.index({ bookingId: 1 });

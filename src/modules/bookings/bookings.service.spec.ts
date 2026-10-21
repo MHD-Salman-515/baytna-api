@@ -502,6 +502,39 @@ describe('BookingsService', () => {
     });
   });
 
+  describe('resolveOwnParty', () => {
+    it('resolves the customer side first, without ever touching her worker profile', async () => {
+      const booking = fakeBooking({ customerId: 'customer-1' });
+      bookingModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(booking) });
+
+      const result = await service.resolveOwnParty('customer-1', bookingId);
+
+      expect(result.role).toBe(Role.CUSTOMER);
+      expect(result.booking).toBe(booking);
+      expect(workerProfilesService.getOwn).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the worker side when the caller is not the customer', async () => {
+      bookingModel.findOne
+        .mockReturnValueOnce({ exec: jest.fn().mockResolvedValue(null) }) // getOwnForCustomer: not hers
+        .mockReturnValueOnce({ exec: jest.fn().mockResolvedValue(fakeBooking()) }); // getOwnForWorker: hers
+
+      const result = await service.resolveOwnParty(workerProfileId, bookingId);
+
+      expect(result.role).toBe(Role.WORKER);
+      expect(workerProfilesService.getOwn).toHaveBeenCalledWith(workerProfileId);
+    });
+
+    it('throws NotFoundException for a user who is neither party', async () => {
+      bookingModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(null) });
+      workerProfilesService.getOwn = jest.fn().mockRejectedValue(new NotFoundException());
+
+      await expect(service.resolveOwnParty('stranger', bookingId)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+  });
+
   describe('worker lifecycle transitions', () => {
     it('accept sets ACCEPTED and acceptedAt', async () => {
       const booking = fakeBooking();

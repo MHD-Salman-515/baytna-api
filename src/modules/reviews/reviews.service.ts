@@ -12,7 +12,6 @@ import { Role } from '../../common/enums/role.enum';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { AuditAction } from '../audit-log/schemas/audit-log.schema';
 import { BookingsService } from '../bookings/bookings.service';
-import { BookingDocument } from '../bookings/schemas/booking.schema';
 import { CountriesService } from '../countries/countries.service';
 import { WorkerProfilesService } from '../workers/worker-profiles.service';
 import { CreateReviewDto } from './dto/create-review.dto';
@@ -36,7 +35,10 @@ export class ReviewsService {
   ) {}
 
   async submit(userId: string, bookingId: string, dto: CreateReviewDto): Promise<ReviewDocument> {
-    const { booking, authorRole } = await this.resolvePartyRole(userId, bookingId);
+    const { booking, role: authorRole } = await this.bookingsService.resolveOwnParty(
+      userId,
+      bookingId,
+    );
 
     if (booking.status !== BookingStatus.COMPLETED) {
       throw new BadRequestException('Only a COMPLETED booking may be reviewed');
@@ -87,7 +89,10 @@ export class ReviewsService {
    * regardless of either of those.
    */
   async getForBooking(userId: string, bookingId: string): Promise<ReviewPairForBooking> {
-    const { booking, authorRole } = await this.resolvePartyRole(userId, bookingId);
+    const { booking, role: authorRole } = await this.bookingsService.resolveOwnParty(
+      userId,
+      bookingId,
+    );
     const otherRole = authorRole === Role.CUSTOMER ? Role.WORKER : Role.CUSTOMER;
 
     const [mine, theirs] = await Promise.all([
@@ -178,28 +183,5 @@ export class ReviewsService {
     const rating = result ? Math.round(result.average * 10) / 10 : 0;
     await this.workerProfilesService.setRating(workerProfileId, rating);
     return rating;
-  }
-
-  /**
-   * Determines which side of `bookingId` the caller is — tries the
-   * customer path first, then falls back to resolving her own worker
-   * profile. Neither matching is a NotFoundException, not a Forbidden —
-   * same "a booking you're not party to simply doesn't exist for you"
-   * discipline BookingsService itself uses everywhere else.
-   */
-  private async resolvePartyRole(
-    userId: string,
-    bookingId: string,
-  ): Promise<{ booking: BookingDocument; authorRole: Role.CUSTOMER | Role.WORKER }> {
-    try {
-      const booking = await this.bookingsService.getOwnForCustomer(userId, bookingId);
-      return { booking, authorRole: Role.CUSTOMER };
-    } catch {
-      // Not the customer — try the worker side.
-    }
-
-    const profile = await this.workerProfilesService.getOwn(userId);
-    const booking = await this.bookingsService.getOwnForWorker(profile.id as string, bookingId);
-    return { booking, authorRole: Role.WORKER };
   }
 }

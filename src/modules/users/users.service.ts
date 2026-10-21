@@ -82,6 +82,15 @@ export class UsersService {
     return user;
   }
 
+  /** Phase 9: every currently-active admin, for fan-out notifications (panic alerts) — never a single hardcoded recipient. */
+  async findAdminIds(): Promise<string[]> {
+    const admins = await this.userModel
+      .find({ roles: Role.ADMIN, status: UserStatus.ACTIVE, isDeleted: false })
+      .select('_id')
+      .exec();
+    return admins.map((admin) => admin.id as string);
+  }
+
   /** Idempotent: creates the user with ADMIN if missing, promotes an existing user to include ADMIN otherwise. */
   async upsertAdmin(
     phone: string,

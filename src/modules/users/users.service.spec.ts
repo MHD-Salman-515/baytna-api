@@ -3,13 +3,14 @@ import { getModelToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Types } from 'mongoose';
 import { Role } from '../../common/enums/role.enum';
-import { User } from './schemas/user.schema';
+import { User, UserStatus } from './schemas/user.schema';
 import { UsersService } from './users.service';
 
 type MockModel = {
   findOne: jest.Mock;
   updateOne: jest.Mock;
   create: jest.Mock;
+  find: jest.Mock;
 };
 
 describe('UsersService', () => {
@@ -25,6 +26,7 @@ describe('UsersService', () => {
       findOne: jest.fn(),
       updateOne: jest.fn(),
       create: jest.fn(),
+      find: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -189,6 +191,24 @@ describe('UsersService', () => {
       expect(result.outcome).toBe('promoted');
       expect(existing.roles).toEqual([Role.CUSTOMER, Role.ADMIN]);
       expect(existing.save).toHaveBeenCalled();
+    });
+  });
+
+  describe('findAdminIds', () => {
+    it('queries every active, non-deleted ADMIN and returns just the ids', async () => {
+      const select = jest.fn().mockReturnValue({
+        exec: jest.fn().mockResolvedValue([{ id: 'admin-1' }, { id: 'admin-2' }]),
+      });
+      model.find.mockReturnValue({ select });
+
+      const result = await service.findAdminIds();
+
+      expect(model.find).toHaveBeenCalledWith({
+        roles: Role.ADMIN,
+        status: UserStatus.ACTIVE,
+        isDeleted: false,
+      });
+      expect(result).toEqual(['admin-1', 'admin-2']);
     });
   });
 });

@@ -21,7 +21,7 @@ describe('ReviewsService', () => {
     countDocuments: jest.Mock;
     aggregate: jest.Mock;
   };
-  let bookingsService: { getOwnForCustomer: jest.Mock; getOwnForWorker: jest.Mock };
+  let bookingsService: { resolveOwnParty: jest.Mock };
   let workerProfilesService: { getOwn: jest.Mock; setRating: jest.Mock };
   let countriesService: { findActiveById: jest.Mock };
   let auditLogService: { record: jest.Mock };
@@ -53,10 +53,7 @@ describe('ReviewsService', () => {
       countDocuments: jest.fn(),
       aggregate: jest.fn().mockResolvedValue([]),
     };
-    bookingsService = {
-      getOwnForCustomer: jest.fn(),
-      getOwnForWorker: jest.fn(),
-    };
+    bookingsService = { resolveOwnParty: jest.fn() };
     workerProfilesService = {
       getOwn: jest.fn().mockResolvedValue({ id: workerProfileId }),
       setRating: jest.fn().mockResolvedValue(undefined),
@@ -75,7 +72,10 @@ describe('ReviewsService', () => {
 
   describe('submit', () => {
     it('writes a CUSTOMER review keyed to the workerProfileId and recomputes the worker rating', async () => {
-      bookingsService.getOwnForCustomer.mockResolvedValue(completedBooking());
+      bookingsService.resolveOwnParty.mockResolvedValue({
+        booking: completedBooking(),
+        role: Role.CUSTOMER,
+      });
       reviewModel.create.mockResolvedValue({ id: 'review-1' });
 
       await service.submit(customerId, bookingId, { rating: 5, comment: 'Great job' });
@@ -93,15 +93,15 @@ describe('ReviewsService', () => {
       expect(workerProfilesService.setRating).toHaveBeenCalled();
     });
 
-    it('writes a WORKER review keyed to the customerId, resolved via her own worker profile, and does not touch the worker rating', async () => {
-      bookingsService.getOwnForCustomer.mockRejectedValue(new NotFoundException());
-      bookingsService.getOwnForWorker.mockResolvedValue(completedBooking());
+    it('writes a WORKER review keyed to the customerId, and does not touch the worker rating', async () => {
+      bookingsService.resolveOwnParty.mockResolvedValue({
+        booking: completedBooking(),
+        role: Role.WORKER,
+      });
       reviewModel.create.mockResolvedValue({ id: 'review-2' });
 
       await service.submit(workerUserId, bookingId, { rating: 4 });
 
-      expect(workerProfilesService.getOwn).toHaveBeenCalledWith(workerUserId);
-      expect(bookingsService.getOwnForWorker).toHaveBeenCalledWith(workerProfileId, bookingId);
       expect(reviewModel.create).toHaveBeenCalledWith(
         expect.objectContaining({ authorRole: Role.WORKER, subjectId: customerId }),
       );
@@ -109,9 +109,10 @@ describe('ReviewsService', () => {
     });
 
     it('rejects a non-COMPLETED booking', async () => {
-      bookingsService.getOwnForCustomer.mockResolvedValue(
-        completedBooking({ status: BookingStatus.IN_PROGRESS }),
-      );
+      bookingsService.resolveOwnParty.mockResolvedValue({
+        booking: completedBooking({ status: BookingStatus.IN_PROGRESS }),
+        role: Role.CUSTOMER,
+      });
 
       await expect(service.submit(customerId, bookingId, { rating: 5 })).rejects.toThrow(
         BadRequestException,
@@ -120,9 +121,10 @@ describe('ReviewsService', () => {
 
     it('rejects once the review window has closed', async () => {
       const longAgo = new Date(Date.now() - 20 * 86_400_000);
-      bookingsService.getOwnForCustomer.mockResolvedValue(
-        completedBooking({ completedAt: longAgo }),
-      );
+      bookingsService.resolveOwnParty.mockResolvedValue({
+        booking: completedBooking({ completedAt: longAgo }),
+        role: Role.CUSTOMER,
+      });
 
       await expect(service.submit(customerId, bookingId, { rating: 5 })).rejects.toThrow(
         BadRequestException,
@@ -130,7 +132,10 @@ describe('ReviewsService', () => {
     });
 
     it('rejects a duplicate review for the same direction as a conflict, not a raw duplicate-key error', async () => {
-      bookingsService.getOwnForCustomer.mockResolvedValue(completedBooking());
+      bookingsService.resolveOwnParty.mockResolvedValue({
+        booking: completedBooking(),
+        role: Role.CUSTOMER,
+      });
       reviewModel.create.mockRejectedValue(Object.assign(new Error('dup'), { code: 11000 }));
 
       await expect(service.submit(customerId, bookingId, { rating: 5 })).rejects.toThrow(
@@ -138,9 +143,8 @@ describe('ReviewsService', () => {
       );
     });
 
-    it('rejects a non-party (neither the customer nor resolvable as the worker)', async () => {
-      bookingsService.getOwnForCustomer.mockRejectedValue(new NotFoundException());
-      workerProfilesService.getOwn.mockRejectedValue(new NotFoundException());
+    it("rejects a non-party, propagating resolveOwnParty's own NotFoundException", async () => {
+      bookingsService.resolveOwnParty.mockRejectedValue(new NotFoundException());
 
       await expect(service.submit('stranger', bookingId, { rating: 5 })).rejects.toThrow(
         NotFoundException,
@@ -150,7 +154,10 @@ describe('ReviewsService', () => {
 
   describe('getForBooking', () => {
     it("returns the caller's own review even when the other side hasn't submitted yet, with theirs null", async () => {
-      bookingsService.getOwnForCustomer.mockResolvedValue(completedBooking());
+      bookingsService.resolveOwnParty.mockResolvedValue({
+        booking: completedBooking(),
+        role: Role.CUSTOMER,
+      });
       reviewModel.findOne
         .mockReturnValueOnce(chainExec({ id: 'mine', authorRole: Role.CUSTOMER }))
         .mockReturnValueOnce(chainExec(null));
@@ -162,7 +169,10 @@ describe('ReviewsService', () => {
     });
 
     it('reveals theirs once both sides have submitted', async () => {
-      bookingsService.getOwnForCustomer.mockResolvedValue(completedBooking());
+      bookingsService.resolveOwnParty.mockResolvedValue({
+        booking: completedBooking(),
+        role: Role.CUSTOMER,
+      });
       reviewModel.findOne
         .mockReturnValueOnce(chainExec({ id: 'mine', authorRole: Role.CUSTOMER }))
         .mockReturnValueOnce(chainExec({ id: 'theirs', authorRole: Role.WORKER }));
@@ -173,7 +183,10 @@ describe('ReviewsService', () => {
     });
 
     it('never reveals theirs — not even as a hidden-flagged object — before both submit or the window closes', async () => {
-      bookingsService.getOwnForCustomer.mockResolvedValue(completedBooking());
+      bookingsService.resolveOwnParty.mockResolvedValue({
+        booking: completedBooking(),
+        role: Role.CUSTOMER,
+      });
       reviewModel.findOne
         .mockReturnValueOnce(chainExec(null)) // I haven't submitted mine
         .mockReturnValueOnce(chainExec({ id: 'theirs', authorRole: Role.WORKER }));
@@ -186,9 +199,10 @@ describe('ReviewsService', () => {
 
     it('reveals theirs once the review window has closed, even if only one side ever submitted', async () => {
       const longAgo = new Date(Date.now() - 20 * 86_400_000);
-      bookingsService.getOwnForCustomer.mockResolvedValue(
-        completedBooking({ completedAt: longAgo }),
-      );
+      bookingsService.resolveOwnParty.mockResolvedValue({
+        booking: completedBooking({ completedAt: longAgo }),
+        role: Role.CUSTOMER,
+      });
       reviewModel.findOne
         .mockReturnValueOnce(chainExec(null))
         .mockReturnValueOnce(chainExec({ id: 'theirs', authorRole: Role.WORKER }));

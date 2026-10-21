@@ -137,4 +137,17 @@ export class LocationTrackingService {
   async markTerminated(bookingId: string): Promise<void> {
     await this.trailModel.updateOne({ bookingId }, { terminatedAt: new Date() }).exec();
   }
+
+  /**
+   * Phase 9: PanicAlertsService's "their last known location" — the raw
+   * point, with no distance/ETA math against a booking address (unlike
+   * getCurrentPosition, used for the live customer-facing view). Null,
+   * never thrown, when nothing was ever reported — a panic alert must
+   * never be rejected for lacking one.
+   */
+  async getLastKnownPoint(bookingId: string): Promise<GeoPoint | null> {
+    const trail = await this.trailModel.findOne({ bookingId }).select('points').exec();
+    const lastPoint = trail?.points[trail.points.length - 1];
+    return lastPoint?.point ?? null;
+  }
 }

@@ -422,6 +422,30 @@ export class BookingsService {
   }
 
   /**
+   * Shared by every Phase 9 module that needs "which side of this booking
+   * is the caller, given only her User id" (reviews, panic, share-trip,
+   * reports) — tries the customer side first, then falls back to resolving
+   * her own worker profile. Neither branch failing is a NotFoundException,
+   * not a Forbidden — same "a booking you're not party to simply doesn't
+   * exist for you" discipline as every other lookup in this service.
+   */
+  async resolveOwnParty(
+    userId: string,
+    bookingId: string,
+  ): Promise<{ booking: BookingDocument; role: Role.CUSTOMER | Role.WORKER }> {
+    try {
+      const booking = await this.getOwnForCustomer(userId, bookingId);
+      return { booking, role: Role.CUSTOMER };
+    } catch {
+      // Not the customer — try the worker side.
+    }
+
+    const profile = await this.workerProfilesService.getOwn(userId);
+    const booking = await this.getOwnForWorker(profile.id as string, bookingId);
+    return { booking, role: Role.WORKER };
+  }
+
+  /**
    * Used by RealtimeGateway to authorize a socket joining a booking's room
    * — a user may only join rooms for bookings she is a party to, checked
    * per join, not just once at connection time. `userId` is a plain User

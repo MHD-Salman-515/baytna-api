@@ -26,6 +26,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 import { RealtimeModule } from './modules/realtime/realtime.module';
 import { WalletsModule } from './modules/wallets/wallets.module';
 import { ReviewsModule } from './modules/reviews/reviews.module';
+import { SafetyModule } from './modules/safety/safety.module';
 
 @Module({
   imports: [
@@ -82,6 +83,7 @@ import { ReviewsModule } from './modules/reviews/reviews.module';
     NotificationsModule,
     RealtimeModule,
     ReviewsModule,
+    SafetyModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
