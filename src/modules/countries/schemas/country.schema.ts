@@ -70,6 +70,34 @@ export const CountryInstantMatchingPolicySchema = SchemaFactory.createForClass(
   CountryInstantMatchingPolicy,
 );
 
+/**
+ * Wallet/commission knobs — Phase 8. Same reasoning as the two policies
+ * above: genuinely vary by market and must stay admin-editable.
+ */
+@Schema({ _id: false })
+export class CountryWalletPolicy {
+  // Signed — a worker's balance may go this far negative before she's
+  // automatically suspended from new matching/bookings. Negative by
+  // convention (e.g. -5000), never positive.
+  @Prop({ type: Number, required: true, default: -5000 })
+  negativeBalanceFloor!: number;
+
+  // A low-balance warning notification fires once when her balance crosses
+  // at-or-below this value — must be >= negativeBalanceFloor (less negative,
+  // i.e. "closer to zero") so the warning always fires before suspension.
+  // Not enforced at the schema level (crosses two fields); WalletsService
+  // just treats whatever's configured as the warning line.
+  @Prop({ type: Number, required: true, default: -2000 })
+  lowBalanceWarningThreshold!: number;
+
+  // Charged to the WORKER's wallet (never the customer) when she cancels
+  // after already accepting. Zero by default — enabling it later is a
+  // country-settings change, not a code change.
+  @Prop({ type: Number, required: true, min: 0, default: 0 })
+  workerCancellationPenaltyAmount!: number;
+}
+export const CountryWalletPolicySchema = SchemaFactory.createForClass(CountryWalletPolicy);
+
 @Schema({ collection: 'countries', ...baseSchemaOptions })
 export class Country extends BaseSchema {
   @Prop({
@@ -107,6 +135,9 @@ export class Country extends BaseSchema {
 
   @Prop({ type: CountryInstantMatchingPolicySchema, default: () => ({}) })
   instantMatchingPolicy!: CountryInstantMatchingPolicy;
+
+  @Prop({ type: CountryWalletPolicySchema, default: () => ({}) })
+  walletPolicy!: CountryWalletPolicy;
 
   @Prop({ type: Boolean, default: true })
   isActive!: boolean;

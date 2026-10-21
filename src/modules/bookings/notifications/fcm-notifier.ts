@@ -54,7 +54,10 @@ export class FcmNotifier extends BaseNotifier {
     const response = await this.getMessaging().sendEachForMulticast({
       tokens,
       notification: { title: copy.title, body: copy.body },
-      data: copy.data,
+      // FCM's data payload must be Record<string, string> — unlike our own
+      // NotificationCopy.data, it has no concept of a null bookingId (the
+      // three wallet event types have no booking at all).
+      data: { type: copy.data.type, bookingId: copy.data.bookingId ?? '' },
     });
 
     return response.responses.map((result, index) => ({

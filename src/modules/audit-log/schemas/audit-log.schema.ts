@@ -22,6 +22,15 @@ export enum AuditAction {
   // writes one of these, always with a reason (see BookingsService.forceStatus).
   BOOKING_FORCE_CANCELLED = 'BOOKING_FORCE_CANCELLED',
   BOOKING_FORCE_NO_SHOW = 'BOOKING_FORCE_NO_SHOW',
+  // Phase 8 — wallet ledger. TOPUP/ADJUSTMENT/REVERSAL/manual reinstatement
+  // are always admin-initiated and always audit-logged; a failed commission
+  // charge is logged too (actorUserId null — it's the system, not an admin)
+  // so "a completed job went uncharged" is never silent.
+  WALLET_TOPUP = 'WALLET_TOPUP',
+  WALLET_ADJUSTMENT = 'WALLET_ADJUSTMENT',
+  WALLET_REVERSAL = 'WALLET_REVERSAL',
+  WALLET_REINSTATED = 'WALLET_REINSTATED',
+  WALLET_COMMISSION_CHARGE_FAILED = 'WALLET_COMMISSION_CHARGE_FAILED',
 }
 
 /**

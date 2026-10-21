@@ -13,6 +13,20 @@ export enum VerificationStatus {
   SUSPENDED = 'SUSPENDED',
 }
 
+/**
+ * Deliberately separate from VerificationStatus's own SUSPENDED value
+ * (Phase 3, disciplinary) — this one is purely financial (Phase 8: her
+ * wallet balance crossed the country's negativeBalanceFloor). Clearing one
+ * must never clear the other: a worker may be APPROVED but financially
+ * SUSPENDED, or disciplinarily SUSPENDED but financially fine. Matching
+ * eligibility (WorkerProfilesService.findApprovedById /
+ * filterApprovedAvailableInCity, PublicWorkersService) requires BOTH to be clear.
+ */
+export enum FinancialStatus {
+  ACTIVE = 'ACTIVE',
+  SUSPENDED = 'SUSPENDED',
+}
+
 @Schema({ collection: 'worker_profiles', ...baseSchemaOptions })
 export class WorkerProfile extends BaseSchema {
   // No `index: true` here — the partial unique index below already covers
@@ -57,6 +71,12 @@ export class WorkerProfile extends BaseSchema {
   // Means nothing unless verificationStatus === APPROVED — she can toggle it any time either way.
   @Prop({ type: Boolean, default: false })
   isAvailable!: boolean;
+
+  // Phase 8: set automatically when her wallet balance crosses
+  // negativeBalanceFloor (WalletsService) or by an admin manual reinstate —
+  // never touched by anything disciplinary. See FinancialStatus's own doc comment.
+  @Prop({ type: String, enum: FinancialStatus, default: FinancialStatus.ACTIVE, index: true })
+  financialStatus!: FinancialStatus;
 
   // Denormalized, computed in a later phase (reviews/bookings) — fields exist now, default 0.
   @Prop({ type: Number, default: 0 })

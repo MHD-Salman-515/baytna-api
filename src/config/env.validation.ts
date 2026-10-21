@@ -95,6 +95,10 @@ export const envValidationSchema = Joi.object({
   SCHEDULED_REMINDER_SWEEP_ENABLED: Joi.boolean().truthy('true').falsy('false').default(true),
   SCHEDULED_REMINDER_SWEEP_INTERVAL_SECONDS: Joi.number().integer().positive().default(300),
 
+  // --- Wallet (Phase 8) ---
+  COMMISSION_CHARGE_RETRY_SWEEP_ENABLED: Joi.boolean().truthy('true').falsy('false').default(true),
+  COMMISSION_CHARGE_RETRY_SWEEP_INTERVAL_SECONDS: Joi.number().integer().positive().default(300),
+
   // --- Notifications / realtime / tracking (Phase 7) ---
   // 'log' (default) never touches a push provider and needs no credentials
   // — safe for dev and the test suite. 'fcm' requires the three FCM_* vars

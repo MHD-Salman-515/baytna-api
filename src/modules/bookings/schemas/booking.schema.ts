@@ -235,6 +235,15 @@ export class Booking extends BaseSchema {
   // every sweep tick between then and scheduledFor. SCHEDULED only.
   @Prop({ type: Date, default: null })
   reminderSentAt!: Date | null;
+
+  // Phase 8: set once WalletsService.chargeCommission has actually written
+  // the COMMISSION_CHARGE ledger entry for this booking's finalPricing. Null
+  // means "not charged yet" — on COMPLETED, that's either "about to be
+  // charged" (normal) or "the charge failed and is awaiting the retry sweep"
+  // (see CommissionChargeRetrySweepService) — never silent either way, since
+  // a failure also writes an audit log entry.
+  @Prop({ type: Date, default: null })
+  commissionChargedAt!: Date | null;
 }
 
 export const BookingSchema = SchemaFactory.createForClass(Booking);
@@ -249,3 +258,5 @@ BookingSchema.index({ workerProfileId: 1, scheduledFor: 1 });
 // Used by the expiry sweep to claim only PENDING_WORKER bookings past their deadline.
 BookingSchema.index({ status: 1, responseDeadline: 1 });
 BookingSchema.index({ 'address.point': '2dsphere' });
+// Used by CommissionChargeRetrySweepService to find COMPLETED bookings still awaiting a charge.
+BookingSchema.index({ status: 1, commissionChargedAt: 1 });

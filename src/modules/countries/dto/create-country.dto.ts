@@ -97,6 +97,33 @@ export class CountryInstantMatchingPolicyDto {
   heartbeatStalenessSeconds?: number;
 }
 
+export class CountryWalletPolicyDto {
+  @ApiPropertyOptional({
+    default: -5000,
+    description: 'Signed — balance floor before auto-suspension',
+  })
+  @IsOptional()
+  @IsInt()
+  negativeBalanceFloor?: number;
+
+  @ApiPropertyOptional({
+    default: -2000,
+    description: 'Balance at/below which a low-balance warning fires',
+  })
+  @IsOptional()
+  @IsInt()
+  lowBalanceWarningThreshold?: number;
+
+  @ApiPropertyOptional({
+    default: 0,
+    description: "Charged to the worker's wallet when she cancels after accepting",
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  workerCancellationPenaltyAmount?: number;
+}
+
 export class CreateCountryDto {
   @ApiProperty({ example: 'SY', description: 'ISO alpha-2 country code' })
   @IsString()
@@ -134,6 +161,12 @@ export class CreateCountryDto {
   @ValidateNested()
   @Type(() => CountryInstantMatchingPolicyDto)
   instantMatchingPolicy?: CountryInstantMatchingPolicyDto;
+
+  @ApiPropertyOptional({ type: CountryWalletPolicyDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CountryWalletPolicyDto)
+  walletPolicy?: CountryWalletPolicyDto;
 
   @ApiPropertyOptional({ type: [String], example: ['CASH'] })
   @IsOptional()

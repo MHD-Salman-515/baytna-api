@@ -17,6 +17,11 @@ export enum NotificationEventType {
   NEW_OFFER = 'NEW_OFFER',
   OFFER_TAKEN = 'OFFER_TAKEN',
   SCHEDULED_REMINDER = 'SCHEDULED_REMINDER',
+  // Worker-facing, wallet (Phase 8) — none of these are tied to a specific
+  // booking, see BookingNotificationEvent.bookingId's own comment.
+  WALLET_LOW_BALANCE = 'WALLET_LOW_BALANCE',
+  WALLET_SUSPENDED = 'WALLET_SUSPENDED',
+  WALLET_REINSTATED = 'WALLET_REINSTATED',
 }
 
 /**
@@ -36,6 +41,12 @@ export const URGENT_NOTIFICATION_TYPES: ReadonlySet<NotificationEventType> = new
   NotificationEventType.NO_WORKER_FOUND,
   NotificationEventType.NEW_OFFER,
   NotificationEventType.OFFER_TAKEN,
+  // She needs to know the moment either of these happens — it changes
+  // whether she can work right now, same urgency class as everything above.
+  NotificationEventType.WALLET_SUSPENDED,
+  NotificationEventType.WALLET_REINSTATED,
+  // WALLET_LOW_BALANCE stays non-urgent, alongside SCHEDULED_REMINDER — it's
+  // a heads-up, not something that just changed her ability to work.
 ]);
 
 export function isUrgentNotificationType(type: NotificationEventType): boolean {
@@ -51,12 +62,18 @@ export function isUrgentNotificationType(type: NotificationEventType): boolean {
 export interface BookingNotificationEvent {
   type: NotificationEventType;
   recipientUserId: string;
-  bookingId: string;
+  // null for the three WALLET_* types (Phase 8) — a balance/suspension event
+  // isn't about any one booking. Every other type always sets it.
+  bookingId: string | null;
   context: {
     workerDisplayName?: string;
     etaMinutes?: number;
     serviceName?: { ar: string; en: string };
     reason?: string;
     scheduledForIso?: string;
+    // WALLET_* only. Never commissionAmount/workerEarnings — a push/socket
+    // payload must never carry what the business actually earned off her.
+    balance?: number;
+    currency?: string;
   };
 }

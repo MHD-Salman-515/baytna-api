@@ -16,4 +16,7 @@ export const SOCKET_EVENT_BY_TYPE: Record<NotificationEventType, string> = {
   [NotificationEventType.NEW_OFFER]: 'offer:new',
   [NotificationEventType.OFFER_TAKEN]: 'offer:taken',
   [NotificationEventType.SCHEDULED_REMINDER]: 'booking:reminder',
+  [NotificationEventType.WALLET_LOW_BALANCE]: 'wallet:lowBalance',
+  [NotificationEventType.WALLET_SUSPENDED]: 'wallet:suspended',
+  [NotificationEventType.WALLET_REINSTATED]: 'wallet:reinstated',
 };

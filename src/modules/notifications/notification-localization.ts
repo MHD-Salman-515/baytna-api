@@ -6,8 +6,9 @@ export interface NotificationCopy {
   // Always exactly { type, bookingId } — what the client routes on. Never
   // an exact address, phone number, document reference, or commission
   // figure; `context` on BookingNotificationEvent is deliberately shaped so
-  // there's nothing sensitive to leak here even by accident.
-  data: { type: string; bookingId: string };
+  // there's nothing sensitive to leak here even by accident. bookingId is
+  // null for the WALLET_* types — they're not about any one booking.
+  data: { type: string; bookingId: string | null };
 }
 
 type Templates = Record<
@@ -94,7 +95,46 @@ const TEMPLATES: Templates = {
           "You have a booking coming up — don't forget to get ready",
           event,
         ),
+  [NotificationEventType.WALLET_LOW_BALANCE]: (locale, event) => {
+    const balance = formatBalance(event.context.balance, event.context.currency);
+    return locale === 'ar'
+      ? copy('رصيدك منخفض', `رصيد محفظتك الحالي ${balance} — يرجى الشحن لتجنب التعليق`, event)
+      : copy(
+          'Your balance is low',
+          `Your current wallet balance is ${balance} — please top up soon`,
+          event,
+        );
+  },
+  [NotificationEventType.WALLET_SUSPENDED]: (locale, event) => {
+    const balance = formatBalance(event.context.balance, event.context.currency);
+    return locale === 'ar'
+      ? copy(
+          'تم تعليق حسابك مؤقتًا',
+          `رصيد محفظتك ${balance} تجاوز الحد المسموح — يرجى الشحن لاستعادة التفعيل`,
+          event,
+        )
+      : copy(
+          'Your account is suspended',
+          `Your wallet balance of ${balance} is past the allowed limit — top up to be reinstated`,
+          event,
+        );
+  },
+  [NotificationEventType.WALLET_REINSTATED]: (locale, event) =>
+    locale === 'ar'
+      ? copy('تم إعادة تفعيل حسابك', 'تمت إعادة تفعيل حسابك ويمكنك استقبال الطلبات الآن', event)
+      : copy(
+          'Your account is reinstated',
+          'Your account is active again — you can receive jobs now',
+          event,
+        ),
 };
+
+function formatBalance(balance: number | undefined, currency: string | undefined): string {
+  if (balance === undefined) {
+    return currency ?? '';
+  }
+  return currency ? `${balance} ${currency}` : String(balance);
+}
 
 export function buildNotificationCopy(
   event: BookingNotificationEvent,

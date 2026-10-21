@@ -34,6 +34,10 @@ export interface AppConfig {
     reminderSweepEnabled: boolean;
     reminderSweepIntervalSeconds: number;
   };
+  wallet: {
+    commissionChargeRetrySweepEnabled: boolean;
+    commissionChargeRetrySweepIntervalSeconds: number;
+  };
   notifications: {
     // 'log' (default — no provider credentials needed, safe for dev/test), 'fcm', or 'onesignal'.
     pushProvider: string;
@@ -104,6 +108,14 @@ export default (): AppConfig => {
       reminderSweepEnabled: process.env.SCHEDULED_REMINDER_SWEEP_ENABLED !== 'false',
       reminderSweepIntervalSeconds: parseInt(
         process.env.SCHEDULED_REMINDER_SWEEP_INTERVAL_SECONDS ?? '300',
+        10,
+      ),
+    },
+    wallet: {
+      commissionChargeRetrySweepEnabled:
+        process.env.COMMISSION_CHARGE_RETRY_SWEEP_ENABLED !== 'false',
+      commissionChargeRetrySweepIntervalSeconds: parseInt(
+        process.env.COMMISSION_CHARGE_RETRY_SWEEP_INTERVAL_SECONDS ?? '300',
         10,
       ),
     },
