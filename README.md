@@ -1275,6 +1275,157 @@ booking's failure not blocking the rest of the batch. `worker-profiles.service.s
 `public-workers.service.spec.ts` assert the new `financialStatus: ACTIVE` gate on every eligibility
 query.
 
+## Reviews, safety and disputes (Phase 9)
+
+The final backend phase: trust (reviews), safety (panic alerts, trusted contacts, share-trip
+links), disputes (reports), and the admin console to run the business day to day.
+
+### Reviews — blind, two-sided, and never shown where they shouldn't be
+
+Either party to a **COMPLETED** booking may review the other, once per direction, within the
+country's configurable `reviewPolicy.reviewWindowDays` (default **14**). Neither side sees the
+other's review until **both** have submitted or the window closes — enforced server-side in
+`ReviewsService.getForBooking`, which returns `theirs: null` outright (never a review object with
+a "hidden" flag) until that condition holds.
+
+A **customer's** review of a worker recomputes `WorkerProfile.rating` from scratch — the average of
+every non-hidden review she's received — the moment it's published; this is independent of the
+blind-reveal rule, since the public aggregate isn't gated on the worker having reviewed back. A
+**worker's** review of a customer is never denormalized anywhere: a customer's rating is computed
+on demand (an aggregation over the Review collection), specifically so there's no stored field that
+could ever leak through `GET /users/me` or any other self-service endpoint — **a customer can never
+see her own rating**, by construction, not by a projection check that could be missed later. It's
+visible to a worker deciding whether to accept an offer/booking (the `WORKER`/`ADMIN` booking and
+pending-offer projections only) and to admins.
+
+`WorkerProfile.completedBookings` (a Phase 3 placeholder, populated here) is recomputed — never
+incremented — from a fresh `COUNT` against the Booking collection every time a booking completes,
+independent of whether it's ever reviewed.
+
+An admin may hide a review with a bilingual reason (`POST /admin/reviews/:id/hide`), audit-logged
+(`REVIEW_HIDDEN`); hiding recomputes the worker's rating the same way publishing it did. `npm run
+reviews:verify` mirrors `wallet:verify` exactly: recomputes every worker's `rating` and
+`completedBookings` from their real sources and reports drift loudly.
+
+### Safety — the emergency path
+
+**Panic alerts.** `POST /bookings/:id/panic` — either party, only during an active booking
+(`ON_THE_WAY`/`ARRIVED`/`IN_PROGRESS`). Records who, when, her last known location (best-effort,
+never required), the booking, and an optional note, then immediately fans out to **every currently
+active admin individually** through the Phase 7 notifier (`PANIC_ALERT_TRIGGERED` — urgent,
+localized ar/en, never suppressed by quiet hours). One admin's failed delivery is logged and never
+hides the alert from the rest, let alone fails the trigger itself back to the person in danger.
+Admins list/view/resolve alerts under `admin/panic-alerts`, each resolution (with a required note)
+audit-logged (`PANIC_ALERT_RESOLVED`).
+
+**Trusted contacts.** `users/me/trusted-contacts` — any user registers her own emergency contacts
+(name, phone, relationship). When a panic fires, the contacts to notify are **snapshotted onto the
+alert at that moment**, not kept as a live reference, so a later edit or deletion of the contact
+can't rewrite what the alert says was notified. Actually sending anything requires SMS, which this
+app doesn't have — what *would* be sent is logged (`[TrustedContact (DEV ONLY)] Would SMS ...`),
+exactly the same seam-and-log discipline Phase 6 used for push before FCM/OneSignal existed.
+
+**Share-trip links — the one unauthenticated route in this entire app.** `POST
+/bookings/:id/share-link` (either party) mints an opaque, unguessable token
+(`crypto.randomBytes(32)`, hex-encoded — never the booking's own id). `GET /share-trip/:token`
+needs no bearer token at all and returns exactly four fields, hand-built by construction (never a
+document spread): the worker's **first name**, her live **position** and **ETA**, and the
+booking's **status**. Nothing else — no phone, no address, no customer id, no pricing. Validity is
+computed at *read time* from the booking's own termination timestamp plus a configurable grace
+period (`SHARE_TRIP_GRACE_PERIOD_MINUTES`, default 60), never a fixed stored `expiresAt` — a job
+that runs long never has its link expire mid-trip. Once the booking is terminal, live position/ETA
+drop to `null` (there's nothing left to track) but the final status stays visible through the grace
+period. A revoked token (`POST .../share-link/revoke`) and one that never existed return the
+**identical 404** — same "doesn't exist for you" discipline used everywhere else, extended to the
+one place in the system with zero authentication to fall back on.
+`ShareTripPurgeSweepService` only tidies up rows that are unambiguously, permanently done; it is
+hygiene, never the enforcement mechanism (`getPublicView` re-checks validity on every single read).
+
+### Reports and disputes
+
+Either party may file a report (`POST /reports`) against a `USER`, a `WORKER`, or a `BOOKING`
+(`NO_SHOW` / `PROPERTY_DAMAGE` / `THEFT` / `HARASSMENT` / `UNSAFE_CONDITIONS` / `PAYMENT_DISPUTE` /
+`QUALITY` / `OTHER`), with attachments uploaded through the exact same validated path as Phase 3's
+worker documents (magic-byte MIME detection — the client's declared type is never trusted). A
+report naming a booking is only accepted from one of that booking's own parties
+(`BookingsService.resolveOwnParty`, shared with Reviews and Safety). `HARASSMENT` and `THEFT` are
+flagged `isHighSeverity` at creation and always sort first in the admin queue, never buried behind
+older low-priority reports.
+
+The admin workflow — assign (`POST .../assign`), change status (`POST .../status`), add an internal
+note (`POST .../notes`, **never** returned to the reporter: the reporter-facing projection has no
+code path that even reads `internalNotes`) — resolves to exactly one outcome via `POST
+.../resolve`: `SUSPEND_WORKER`, `FORCE_NO_SHOW`, `WALLET_ADJUSTMENT`, or `DISMISS`. Every one of
+these calls straight into the service that already owns that operation —
+`WorkerProfilesService.reviewWorker`, `BookingsService.forceStatus`, `WalletsService.adjust` —
+never reimplemented here. In particular, `SUSPEND_WORKER` only ever sets `verificationStatus`
+(disciplinary); the resolution path has no access to `financialStatus` at all, so a report-driven
+suspension structurally cannot touch a worker's wallet eligibility, the same independence Phase 8
+established between the two.
+
+### Admin console
+
+A read-only aggregator sitting on top of every other module — it owns no schema of its own and
+reuses each domain's existing admin-facing method wherever one already existed, rather than
+querying a raw model a second time.
+
+- `GET /admin/console/dashboard` — bookings by status today/this week, pending verifications, open
+  (+ investigating) reports, unresolved panic alerts, workers below their country's low-balance
+  floor, and the INSTANT matching failure rate (`NO_WORKER_FOUND` share of INSTANT requests this
+  week).
+- `GET /admin/console/search?phone=&name=&bookingNumber=` — three independent lookups (users,
+  resolved workers, bookings), each through its own existing projection — never a merged scan
+  across unrelated collections.
+- `GET /admin/console/workers/:id/360` — one worker's profile, documents, services, recent
+  bookings, recent reviews, wallet, and reports, composed entirely from parallel calls into the
+  services that already own each piece.
+- `GET /admin/console/metrics?sinceDays=` — average time-to-accept, completion rate, cancellation
+  rate by party (one aggregation pipeline against Booking, never loaded into memory to compute in
+  JS), and the platform-wide average rating (restricted to workers who've actually completed a
+  booking, so an unreviewed brand-new profile's 0 doesn't drag it down).
+
+### New environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SHARE_TRIP_GRACE_PERIOD_MINUTES` | `60` | how long a share-trip link keeps working after its booking terminates |
+| `SHARE_TRIP_PURGE_SWEEP_ENABLED` | `true` | toggles `ShareTripPurgeSweepService` |
+| `SHARE_TRIP_PURGE_SWEEP_INTERVAL_SECONDS` | `300` | its polling interval |
+
+Plus, per-country in `Country.reviewPolicy` (admin-editable via the existing country CRUD, not an
+env var): `reviewWindowDays` (default `14`).
+
+### `npm run reviews:verify`
+
+Recomputes every worker's `rating` (from the Review collection, excluding hidden reviews) and
+`completedBookings` (from the Booking collection) and reports any drift against the stored,
+denormalized values — loudly, non-zero exit, exactly like `wallet:verify`.
+
+### Access control, restated
+
+A customer never sees her own rating, another customer's reports, or any report's internal notes.
+A worker sees a customer's rating only through the WORKER-viewer booking/offer projections — never
+a dedicated "look up this customer" endpoint. `GET /share-trip/:token` is the only route in this
+app with no `JwtAuthGuard` check at all; everything it returns is allowlisted by construction in
+`ShareTripService.getPublicView`, not by stripping fields from a larger object afterward.
+
+### Tests
+
+`reviews.service.spec.ts` covers the blind-reveal rule explicitly returning `null` (not a
+hidden-flagged object) for `theirs` before both sides submit or the window closes, review
+eligibility (non-party, non-COMPLETED, duplicate, out-of-window all rejected), and
+`recomputeWorkerRating`'s full-recompute discipline. `panic-alerts.service.spec.ts` covers the
+active-status gate, the trusted-contact snapshot (not a live reference), and one admin's failed
+notification never blocking the others or the trigger itself. `share-trip.service.spec.ts` is the
+most adversarial suite in the app: it asserts the public view's response contains **only** the four
+allowlisted keys, that a revoked token 404s identically to a nonexistent one, that position/ETA
+drop to `null` once terminal, and that it expires once the grace period elapses.
+`reports.service.spec.ts` covers every resolution action calling exactly the right existing service
+with the right arguments, the two subject-type guards (`SUSPEND_WORKER`/`WALLET_ADJUSTMENT` both
+require a `WORKER`-subject report), and that the reporter-facing projection never carries
+`internalNotes`. `admin-console.service.spec.ts` asserts every dashboard count and the 360 view are
+built from each owning service's own method, never a raw model query.
+
 ## MongoDB options
 
 ### Option A: Atlas (no local install)
@@ -1499,7 +1650,9 @@ Auth endpoints are listed under "Authentication" above; worker/admin/audit-log e
 "Worker verification" above; service catalog/pricing/quote endpoints under "Service catalog and
 pricing" above; booking/availability-window/slots endpoints under "Bookings" above;
 presence/offers endpoints under "Instant bookings and broadcast matching" above; wallet/top-up/ledger
-endpoints under "Worker wallet, commission collection and suspension" above. Countries/cities:
+endpoints under "Worker wallet, commission collection and suspension" above; reviews, panic alerts,
+trusted contacts, share-trip links, reports and the admin console under "Reviews, safety and
+disputes" above. Countries/cities:
 
 | Method | Path | Auth | Notes |
 |---|---|---|---|
@@ -1760,3 +1913,80 @@ non-transactional `$inc`-then-insert compensation pattern in `recordEntry` has o
 gap — a crash between the two steps — caught only after the fact by `wallet:verify`, not prevented;
 closing that gap for real would mean requiring a replica-set MongoDB (Atlas already is one) even for
 local development, which this phase deliberately didn't force.
+
+### Phase 9 — what shipped, and what didn't (final backend phase)
+
+Delivered: everything under "Reviews, safety and disputes" above — blind two-sided reviews with the
+other party's review genuinely withheld (not merely flagged) until both submit or the window
+closes; `WorkerProfile.rating`/`completedBookings` populated from their Phase 3 placeholder state
+and kept correct by full recomputation, never an increment, with `reviews:verify` as the drift
+detector; a customer rating that is computed on demand specifically so no stored field could ever
+leak it back to the customer herself; panic alerts that fan out to every admin individually and
+degrade gracefully when one delivery fails; trusted-contact snapshotting with the SMS seam logged,
+not sent; share-trip links — the one unauthenticated route in the app — with a hand-built,
+by-construction allowlist and grace-period-based expiry re-checked on every read; reports with
+high-severity queue sorting and a resolution step that calls straight into existing services
+instead of reimplementing any of them, with the disciplinary suspension path structurally unable to
+touch `financialStatus`; and an admin console built entirely by composing every other module's
+existing admin-facing methods.
+
+Deliberately deferred: actually sending an SMS to a trusted contact (no provider integrated — this
+is the exact seam-and-log pattern Phase 6 used for push before FCM/OneSignal existed, ready to wire
+up the same way). No aggregate historical trend charts in the admin console (the dashboard and
+metrics endpoints are current-snapshot, not a time series). No bulk report/review moderation
+actions (hide/resolve are one-at-a-time). The admin search's "name" match is a simple
+case-insensitive substring on `profile.firstName`/`lastName` — no fuzzy matching, no phonetic
+search. Self-service top-up and customer-side cancellation-fee collection remain out of scope,
+exactly as Phase 8 left them — nothing in this phase changes that.
+
+## Running this in production
+
+A checklist of everything this project's nine phases deliberately deferred, left as a seam, or
+left configured for local/staging convenience — go through this before pointing a production
+deployment at real users and real money.
+
+- **SMS provider for trusted contacts** (Phase 9): no provider is integrated. `PanicAlertsService`
+  already snapshots the contacts and logs exactly what would be sent
+  (`[TrustedContact (DEV ONLY)] Would SMS ...`) — wire a real provider (Twilio, a regional
+  aggregator) behind that same seam, the way `OneSignalNotifier` was added alongside `FcmNotifier`
+  in Phase "two targeted changes" without touching `LogNotifier`.
+- **OneSignal/FCM credentials** (Phase 7): `NOTIFICATION_PUSH_PROVIDER` defaults to `log` — fine
+  for dev/CI, useless for real push. Set real `ONESIGNAL_APP_ID`/`ONESIGNAL_REST_API_KEY` or
+  `FCM_PROJECT_ID`/`FCM_CLIENT_EMAIL`/`FCM_PRIVATE_KEY` before launch.
+- **R2/S3-compatible storage** (Phase 3): `LocalFileStorage` is the dev default and serves files
+  from `STORAGE_LOCAL_DIR` through this same process — not acceptable once there's more than one
+  instance, or for anything beyond a demo. Configure `S3_BUCKET`/`S3_REGION`/`S3_ACCESS_KEY_ID`/
+  `S3_SECRET_ACCESS_KEY`/`S3_ENDPOINT` (R2, or any S3-compatible provider) first.
+- **Seeded admin** (Phase 2): `SEED_ADMIN_PHONE` + `npm run seed` creates/promotes one admin from a
+  phone number committed to `.env` for development. Rotate to a real operational phone number (or
+  several, promoted via `UsersService.addRole`) before launch, and don't leave the dev phone number
+  as a standing admin.
+- **Dev OTP retrieval endpoint** (the "two targeted changes" phase): `GET /dev/last-otp` and
+  `StoredOtpSender` both refuse to initialize when `NODE_ENV=production` — verify this is actually
+  set in the production environment, not just assumed. If it somehow weren't, this endpoint would
+  hand out live OTP codes.
+- **Secrets rotation**: `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `OTP_PEPPER`, and
+  `DEV_OTP_ACCESS_KEY` are all plain env vars with no rotation mechanism built in. Rotating
+  `JWT_ACCESS_SECRET`/`JWT_REFRESH_SECRET` invalidates every live session; plan a rotation window,
+  don't do it mid-incident without warning.
+- **Demo data cleanup**: every phase in this project was demoed against the same long-lived Atlas
+  cluster with real seed data plus whatever each live demo created (test bookings, wallets,
+  reviews, panic alerts, reports, trusted contacts). None of it is tagged as demo data. Before
+  pointing this database at real users, either start a fresh cluster/database or audit and purge
+  every collection by hand — there is no "wipe demo data" script, deliberately: writing one that's
+  safe to run against a database that might also hold real data by then is a bigger, separate task.
+- **Redis** (Phase 2 OTP state, Phase 7 socket.io adapter): both are optional and fall back to
+  in-process state (`REDIS_URL` unset, `WEBSOCKET_REDIS_ADAPTER_ENABLED=false`) — fine for a single
+  instance, broken for OTP consistency and socket fan-out across more than one. Required once this
+  runs on more than one instance.
+- **MongoDB replica set** (Phase 8): the wallet ledger's `recordEntry` uses a non-transactional
+  compensation pattern specifically because local development has no replica set. Atlas already is
+  one — `npm run wallet:verify`/`reviews:verify` are the drift detectors for the narrow gap that
+  remains even there (a crash between two non-transactional writes), not a reason to skip them.
+- **Document retention** (Phase 3): `DOCUMENT_RETENTION_DAYS` controls how long rejected/expired
+  worker documents survive before `purge-documents.ts` deletes them — confirm this matches whatever
+  real data-retention policy the business has signed up to, not just the development default.
+- **Rate limits and sweep intervals**: every `*_SWEEP_INTERVAL_SECONDS`/throttle value in
+  `.env.example` was chosen for fast local iteration and demoing, not production load. Revisit
+  `THROTTLE_TTL`/`THROTTLE_LIMIT`, the OTP-specific throttle, and every sweep's interval against
+  real expected traffic before launch.
