@@ -238,6 +238,28 @@ export class WorkerProfilesService {
     return matches.map((m) => m.id as string);
   }
 
+  /**
+   * Phase 9: BookingsService.complete() recomputes her true COMPLETED count
+   * from the Booking collection (the source of truth) and passes it in here
+   * — this method only persists what it's told, never increments. Mirrors
+   * setRating below; splitting the two keeps BookingsModule from needing
+   * the Review model just to touch WorkerProfile.
+   */
+  async setCompletedBookingsCount(workerProfileId: string, count: number): Promise<void> {
+    await this.profileModel
+      .updateOne({ _id: workerProfileId }, { completedBookings: count })
+      .exec();
+  }
+
+  /**
+   * Phase 9: ReviewsService recomputes her average from the Review
+   * collection (never hidden reviews) and passes the fresh value in here —
+   * same "recompute, never increment" discipline as setCompletedBookingsCount.
+   */
+  async setRating(workerProfileId: string, rating: number): Promise<void> {
+    await this.profileModel.updateOne({ _id: workerProfileId }, { rating }).exec();
+  }
+
   async reviewWorker(
     adminUserId: string,
     workerProfileId: string,

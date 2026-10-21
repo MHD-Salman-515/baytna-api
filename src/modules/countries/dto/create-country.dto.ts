@@ -124,6 +124,17 @@ export class CountryWalletPolicyDto {
   workerCancellationPenaltyAmount?: number;
 }
 
+export class CountryReviewPolicyDto {
+  @ApiPropertyOptional({
+    default: 14,
+    description: 'Days after completion either party may still submit her review',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  reviewWindowDays?: number;
+}
+
 export class CreateCountryDto {
   @ApiProperty({ example: 'SY', description: 'ISO alpha-2 country code' })
   @IsString()
@@ -167,6 +178,12 @@ export class CreateCountryDto {
   @ValidateNested()
   @Type(() => CountryWalletPolicyDto)
   walletPolicy?: CountryWalletPolicyDto;
+
+  @ApiPropertyOptional({ type: CountryReviewPolicyDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CountryReviewPolicyDto)
+  reviewPolicy?: CountryReviewPolicyDto;
 
   @ApiPropertyOptional({ type: [String], example: ['CASH'] })
   @IsOptional()

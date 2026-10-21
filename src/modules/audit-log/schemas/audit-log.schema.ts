@@ -31,6 +31,21 @@ export enum AuditAction {
   WALLET_REVERSAL = 'WALLET_REVERSAL',
   WALLET_REINSTATED = 'WALLET_REINSTATED',
   WALLET_COMMISSION_CHARGE_FAILED = 'WALLET_COMMISSION_CHARGE_FAILED',
+  // Phase 9 — reviews, safety and disputes. A review itself isn't
+  // audit-logged (it's a normal user action, not an admin/privileged one) —
+  // only an admin HIDING one is, since that's a moderation action affecting
+  // a published aggregate.
+  REVIEW_HIDDEN = 'REVIEW_HIDDEN',
+  // A panic alert's creation is never audit-logged by the trigger itself
+  // (urgent, user-facing, not an admin action) — only an admin resolving one
+  // is, same reasoning as REVIEW_HIDDEN.
+  PANIC_ALERT_RESOLVED = 'PANIC_ALERT_RESOLVED',
+  SHARE_TRIP_LINK_REVOKED = 'SHARE_TRIP_LINK_REVOKED',
+  REPORT_ASSIGNED = 'REPORT_ASSIGNED',
+  REPORT_STATUS_CHANGED = 'REPORT_STATUS_CHANGED',
+  REPORT_NOTE_ADDED = 'REPORT_NOTE_ADDED',
+  REPORT_RESOLVED = 'REPORT_RESOLVED',
+  REPORT_ATTACHMENT_VIEWED = 'REPORT_ATTACHMENT_VIEWED',
 }
 
 /**

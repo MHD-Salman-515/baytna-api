@@ -14,6 +14,7 @@ function offer(overrides: Partial<OfferProjectionInput> = {}): OfferProjectionIn
     cityId: 'city-1',
     landmark: 'Next to the blue mosque',
     sentAt: new Date('2026-11-01T10:00:00.000Z'),
+    customerRating: null,
     ...overrides,
   };
 }
@@ -31,6 +32,7 @@ const ALLOWED_KEYS = new Set([
   'cityId',
   'landmark',
   'sentAt',
+  'customerRating',
 ]);
 
 describe('toOfferView', () => {

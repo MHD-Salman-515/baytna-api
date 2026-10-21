@@ -29,7 +29,12 @@ import { WorkerProfilesService } from '../workers/worker-profiles.service';
 import { WorkerServicesService } from '../workers/worker-services.service';
 import { DirectAssignmentStrategy } from './assignment/direct-assignment.strategy';
 import { NearestAvailableAssignmentStrategy } from './assignment/nearest-available-assignment.strategy';
-import { BookingProjectionInput, BookingViewer, toBookingView } from './booking-projection';
+import {
+  BookingProjectionInput,
+  BookingViewer,
+  CustomerRatingSummary,
+  toBookingView,
+} from './booking-projection';
 import { BookingAction, assertValidAction } from './booking.state-machine';
 import { computeFinalPricing } from './compute-final-pricing';
 import { AdminFindBookingsQueryDto } from './dto/admin-find-bookings-query.dto';
@@ -47,6 +52,7 @@ import {
   BookingOfferOutcome,
 } from './schemas/booking-offer.schema';
 import { Booking, BookingDocument, BookingPricingSnapshot } from './schemas/booking.schema';
+import { Review, ReviewDocument } from '../reviews/schemas/review.schema';
 import { subtractBusyIntervals, TimeInterval } from './subtract-busy-intervals';
 
 const NON_TERMINAL_STATUSES = [
@@ -66,6 +72,7 @@ export class BookingsService {
   constructor(
     @InjectModel(Booking.name) private readonly bookingModel: Model<BookingDocument>,
     @InjectModel(BookingOffer.name) private readonly bookingOfferModel: Model<BookingOfferDocument>,
+    @InjectModel(Review.name) private readonly reviewModel: Model<ReviewDocument>,
     private readonly workerServicesService: WorkerServicesService,
     private readonly workerProfilesService: WorkerProfilesService,
     private readonly workerAvailabilityService: WorkerAvailabilityService,
@@ -381,6 +388,7 @@ export class BookingsService {
         cityId: booking.cityId.toString(),
         landmark: booking.address.landmark,
         sentAt: offer.sentAt,
+        customerRating: await this.getCustomerRatingSummary(booking.customerId.toString()),
       };
       views.push(toOfferView(input));
     }
@@ -554,6 +562,7 @@ export class BookingsService {
     await booking.save();
     await this.locationTrackingService.markTerminated(bookingId);
     await this.chargeCommissionSafely(booking);
+    await this.recomputeCompletedBookingsCountSafely(booking.workerProfileId!.toString());
 
     await this.notifier.notify({
       type: NotificationEventType.JOB_COMPLETED,
@@ -594,6 +603,27 @@ export class BookingsService {
         targetId: booking.id as string,
         metadata: { error: (error as Error).message },
       });
+    }
+  }
+
+  /**
+   * Phase 9: WorkerProfile.completedBookings is denormalized for fast
+   * reads, but this (a full recount against the Booking collection) is the
+   * only thing that may ever write it — never a blind increment, so a
+   * double-complete or a missed one can't drift it. Never blocks
+   * completion: a stats write failing is logged, not fatal.
+   */
+  private async recomputeCompletedBookingsCountSafely(workerProfileId: string): Promise<void> {
+    try {
+      const count = await this.bookingModel
+        .countDocuments({ workerProfileId, status: BookingStatus.COMPLETED })
+        .exec();
+      await this.workerProfilesService.setCompletedBookingsCount(workerProfileId, count);
+    } catch (error) {
+      this.logger.error(
+        `Failed to recompute completedBookings for worker profile ${workerProfileId}`,
+        (error as Error).stack,
+      );
     }
   }
 
@@ -777,19 +807,61 @@ export class BookingsService {
   }
 
   async projectForWorker(booking: BookingDocument): Promise<Record<string, unknown>> {
-    const customerPhone = await this.getCustomerPhone(booking.customerId.toString());
+    const [customerPhone, customerRating] = await Promise.all([
+      this.getCustomerPhone(booking.customerId.toString()),
+      this.getCustomerRatingSummary(booking.customerId.toString()),
+    ]);
     return toBookingView(this.toProjectionInput(booking), 'WORKER', {
       workerPhone: null,
       customerPhone,
+      customerRating,
     });
   }
 
   async projectForAdmin(booking: BookingDocument): Promise<Record<string, unknown>> {
-    const [workerPhone, customerPhone] = await Promise.all([
+    const [workerPhone, customerPhone, customerRating] = await Promise.all([
       booking.workerProfileId ? this.getWorkerPhone(booking.workerProfileId.toString()) : null,
       this.getCustomerPhone(booking.customerId.toString()),
+      this.getCustomerRatingSummary(booking.customerId.toString()),
     ]);
-    return toBookingView(this.toProjectionInput(booking), 'ADMIN', { workerPhone, customerPhone });
+    return toBookingView(this.toProjectionInput(booking), 'ADMIN', {
+      workerPhone,
+      customerPhone,
+      customerRating,
+    });
+  }
+
+  /**
+   * Phase 9: "visible only to workers deciding whether to accept, and to
+   * admins" — never computed for the CUSTOMER viewer (projectForCustomer
+   * never calls this). Reads the Review collection directly via a model
+   * registered locally in BookingsModule rather than importing
+   * ReviewsModule, which would need to import BookingsModule right back
+   * (ReviewsService needs Booking for eligibility checks) — the same
+   * "register the schema where it's read, don't import the owning module"
+   * choice used throughout this app to avoid circular module graphs.
+   */
+  private async getCustomerRatingSummary(
+    customerId: string,
+  ): Promise<CustomerRatingSummary | null> {
+    if (!Types.ObjectId.isValid(customerId)) {
+      return null;
+    }
+    const [result] = await this.reviewModel.aggregate<{ average: number; count: number }>([
+      {
+        $match: {
+          subjectId: new Types.ObjectId(customerId),
+          authorRole: Role.WORKER,
+          isHidden: false,
+          isDeleted: false,
+        },
+      },
+      { $group: { _id: null, average: { $avg: '$rating' }, count: { $sum: 1 } } },
+    ]);
+    if (!result || result.count === 0) {
+      return null;
+    }
+    return { average: Math.round(result.average * 10) / 10, count: result.count };
   }
 
   async projectMany(

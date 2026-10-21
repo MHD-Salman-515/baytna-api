@@ -25,6 +25,7 @@ import { LocationTrackingService } from './location-tracking.service';
 import { BOOKING_NOTIFIER } from './notifications/booking-notifier.interface';
 import { BookingOffer } from './schemas/booking-offer.schema';
 import { Booking } from './schemas/booking.schema';
+import { Review } from '../reviews/schemas/review.schema';
 
 const bookingId = new Types.ObjectId().toString();
 
@@ -84,6 +85,7 @@ describe('BookingsService', () => {
     exists: jest.Mock;
   };
   let bookingOfferModel: { find: jest.Mock };
+  let reviewModel: { aggregate: jest.Mock };
   let workerServicesService: {
     findActiveById: jest.Mock;
     findActiveByWorkerAndService: jest.Mock;
@@ -92,6 +94,7 @@ describe('BookingsService', () => {
     findApprovedById: jest.Mock;
     getForAdmin: jest.Mock;
     getOwn: jest.Mock;
+    setCompletedBookingsCount: jest.Mock;
   };
   let workerAvailabilityService: { getWindowsForDate: jest.Mock };
   let servicesService: { findActiveById: jest.Mock };
@@ -172,6 +175,7 @@ describe('BookingsService', () => {
       exists: jest.fn(),
     };
     bookingOfferModel = { find: jest.fn() };
+    reviewModel = { aggregate: jest.fn().mockResolvedValue([]) };
     workerServicesService = {
       findActiveById: jest.fn().mockResolvedValue(workerService),
       findActiveByWorkerAndService: jest.fn().mockResolvedValue(workerService),
@@ -180,6 +184,7 @@ describe('BookingsService', () => {
       findApprovedById: jest.fn().mockResolvedValue(profile),
       getForAdmin: jest.fn().mockResolvedValue(profile),
       getOwn: jest.fn().mockResolvedValue(profile),
+      setCompletedBookingsCount: jest.fn().mockResolvedValue(undefined),
     };
     workerAvailabilityService = {
       getWindowsForDate: jest.fn().mockResolvedValue([
@@ -224,12 +229,14 @@ describe('BookingsService', () => {
     bookingModel.find.mockReturnValue(chainable([]));
     bookingModel.exists.mockResolvedValue(null);
     bookingModel.create.mockImplementation((doc) => Promise.resolve({ ...doc, id: 'new-booking' }));
+    bookingModel.countDocuments.mockReturnValue({ exec: jest.fn().mockResolvedValue(0) });
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         BookingsService,
         { provide: getModelToken(Booking.name), useValue: bookingModel },
         { provide: getModelToken(BookingOffer.name), useValue: bookingOfferModel },
+        { provide: getModelToken(Review.name), useValue: reviewModel },
         { provide: WorkerServicesService, useValue: workerServicesService },
         { provide: WorkerProfilesService, useValue: workerProfilesService },
         { provide: WorkerAvailabilityService, useValue: workerAvailabilityService },
@@ -668,6 +675,37 @@ describe('BookingsService', () => {
         }),
       );
     });
+
+    it('recomputes completedBookings from a fresh count against the Booking collection, never incrementing', async () => {
+      const startedAt = new Date(Date.now() - 3 * 60 * 60 * 1000);
+      const booking = fakeBooking({ status: BookingStatus.IN_PROGRESS, startedAt });
+      bookingModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(booking) });
+      bookingModel.countDocuments.mockReturnValue({ exec: jest.fn().mockResolvedValue(12) });
+
+      await service.complete(workerProfileId, bookingId);
+
+      expect(bookingModel.countDocuments).toHaveBeenCalledWith({
+        workerProfileId: 'worker-profile-1',
+        status: BookingStatus.COMPLETED,
+      });
+      expect(workerProfilesService.setCompletedBookingsCount).toHaveBeenCalledWith(
+        'worker-profile-1',
+        12,
+      );
+    });
+
+    it('still completes when the completedBookings recount fails', async () => {
+      const startedAt = new Date(Date.now() - 3 * 60 * 60 * 1000);
+      const booking = fakeBooking({ status: BookingStatus.IN_PROGRESS, startedAt });
+      bookingModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(booking) });
+      bookingModel.countDocuments.mockReturnValue({
+        exec: jest.fn().mockRejectedValue(new Error('db unreachable')),
+      });
+
+      const result = await service.complete(workerProfileId, bookingId);
+
+      expect(result.status).toBe(BookingStatus.COMPLETED);
+    });
   });
 
   describe('acceptOffer', () => {
@@ -817,6 +855,7 @@ describe('BookingsService', () => {
             estimatedDurationMinutes: 60,
             cityId: { toString: () => cityId },
             address: { landmark: 'Blue mosque' },
+            customerId: { toString: () => 'customer-1' },
           },
         ]),
       );

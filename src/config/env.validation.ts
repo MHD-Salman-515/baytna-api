@@ -140,4 +140,8 @@ export const envValidationSchema = Joi.object({
   LOCATION_TRAIL_RETENTION_HOURS: Joi.number().integer().positive().default(24),
   LOCATION_TRAIL_PURGE_SWEEP_ENABLED: Joi.boolean().truthy('true').falsy('false').default(true),
   LOCATION_TRAIL_PURGE_SWEEP_INTERVAL_SECONDS: Joi.number().integer().positive().default(300),
+  // How long a share-trip link keeps working after its booking terminates.
+  SHARE_TRIP_GRACE_PERIOD_MINUTES: Joi.number().integer().positive().default(60),
+  SHARE_TRIP_PURGE_SWEEP_ENABLED: Joi.boolean().truthy('true').falsy('false').default(true),
+  SHARE_TRIP_PURGE_SWEEP_INTERVAL_SECONDS: Joi.number().integer().positive().default(300),
 });

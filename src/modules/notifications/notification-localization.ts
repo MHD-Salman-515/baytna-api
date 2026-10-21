@@ -127,6 +127,17 @@ const TEMPLATES: Templates = {
           'Your account is active again — you can receive jobs now',
           event,
         ),
+  [NotificationEventType.PANIC_ALERT_TRIGGERED]: (locale, event) => {
+    const role = event.context.triggeredByRole === 'WORKER' ? 'worker' : 'customer';
+    const roleAr = event.context.triggeredByRole === 'WORKER' ? 'العاملة' : 'الزبون';
+    return locale === 'ar'
+      ? copy('تنبيه طوارئ', `ضغط ${roleAr} زر الطوارئ خلال طلب نشط — راجع التفاصيل فورًا`, event)
+      : copy(
+          'Emergency alert',
+          `The ${role} triggered a panic alert during an active booking — review immediately`,
+          event,
+        );
+  },
 };
 
 function formatBalance(balance: number | undefined, currency: string | undefined): string {

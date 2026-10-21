@@ -36,6 +36,7 @@ import {
 } from './schemas/booking-location-trail.schema';
 import { BookingOffer, BookingOfferSchema } from './schemas/booking-offer.schema';
 import { Booking, BookingSchema } from './schemas/booking.schema';
+import { Review, ReviewSchema } from '../reviews/schemas/review.schema';
 import { WorkerBookingsController } from './worker-bookings.controller';
 import { WorkerOffersController } from './worker-offers.controller';
 import { WorkerSlotsController } from './worker-slots.controller';
@@ -46,6 +47,11 @@ import { WorkerSlotsController } from './worker-slots.controller';
       { name: Booking.name, schema: BookingSchema },
       { name: BookingOffer.name, schema: BookingOfferSchema },
       { name: BookingLocationTrail.name, schema: BookingLocationTrailSchema },
+      // Read-only here (Phase 9's customer-rating lookup for the WORKER/ADMIN
+      // projection) — registered locally rather than importing ReviewsModule,
+      // which would need to import BookingsModule right back. See
+      // getCustomerRatingSummary's own comment.
+      { name: Review.name, schema: ReviewSchema },
     ]),
     WorkersModule,
     ServicesModule,

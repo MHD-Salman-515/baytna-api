@@ -98,6 +98,19 @@ export class CountryWalletPolicy {
 }
 export const CountryWalletPolicySchema = SchemaFactory.createForClass(CountryWalletPolicy);
 
+/**
+ * Review/safety knobs — Phase 9. Same reasoning as the policies above.
+ */
+@Schema({ _id: false })
+export class CountryReviewPolicy {
+  // Either party may submit her review of the other within this many days
+  // of completedAt. After it closes, an un-reviewed direction simply never
+  // gets reviewed — it does not retroactively reveal the other side's review.
+  @Prop({ type: Number, required: true, min: 1, default: 14 })
+  reviewWindowDays!: number;
+}
+export const CountryReviewPolicySchema = SchemaFactory.createForClass(CountryReviewPolicy);
+
 @Schema({ collection: 'countries', ...baseSchemaOptions })
 export class Country extends BaseSchema {
   @Prop({
@@ -138,6 +151,9 @@ export class Country extends BaseSchema {
 
   @Prop({ type: CountryWalletPolicySchema, default: () => ({}) })
   walletPolicy!: CountryWalletPolicy;
+
+  @Prop({ type: CountryReviewPolicySchema, default: () => ({}) })
+  reviewPolicy!: CountryReviewPolicy;
 
   @Prop({ type: Boolean, default: true })
   isActive!: boolean;

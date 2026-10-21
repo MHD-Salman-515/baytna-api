@@ -61,6 +61,11 @@ export interface AppConfig {
     trailPurgeSweepEnabled: boolean;
     trailPurgeSweepIntervalSeconds: number;
   };
+  safety: {
+    shareTripGracePeriodMinutes: number;
+    shareTripTokenPurgeSweepEnabled: boolean;
+    shareTripTokenPurgeSweepIntervalSeconds: number;
+  };
 }
 
 export default (): AppConfig => {
@@ -145,6 +150,17 @@ export default (): AppConfig => {
       trailPurgeSweepEnabled: process.env.LOCATION_TRAIL_PURGE_SWEEP_ENABLED !== 'false',
       trailPurgeSweepIntervalSeconds: parseInt(
         process.env.LOCATION_TRAIL_PURGE_SWEEP_INTERVAL_SECONDS ?? '300',
+        10,
+      ),
+    },
+    safety: {
+      shareTripGracePeriodMinutes: parseInt(
+        process.env.SHARE_TRIP_GRACE_PERIOD_MINUTES ?? '60',
+        10,
+      ),
+      shareTripTokenPurgeSweepEnabled: process.env.SHARE_TRIP_PURGE_SWEEP_ENABLED !== 'false',
+      shareTripTokenPurgeSweepIntervalSeconds: parseInt(
+        process.env.SHARE_TRIP_PURGE_SWEEP_INTERVAL_SECONDS ?? '300',
         10,
       ),
     },

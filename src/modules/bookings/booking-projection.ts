@@ -61,9 +61,19 @@ export interface BookingProjectionInput {
   customerNote: string | null;
 }
 
+export interface CustomerRatingSummary {
+  average: number;
+  count: number;
+}
+
 export interface BookingPhones {
   workerPhone: string | null;
   customerPhone: string | null;
+  // Phase 9: null when she has no (non-hidden) reviews yet, or for the
+  // CUSTOMER viewer — a customer must never see her own rating (per spec,
+  // it exists purely so a worker/admin can judge reliability before/while
+  // dealing with her).
+  customerRating?: CustomerRatingSummary | null;
 }
 
 /**
@@ -126,9 +136,11 @@ export function toBookingView(
     view.workerPhone = revealed ? phones.workerPhone : null;
   } else if (viewer === 'WORKER') {
     view.customerPhone = revealed ? phones.customerPhone : null;
+    view.customerRating = phones.customerRating ?? null;
   } else {
     view.workerPhone = phones.workerPhone;
     view.customerPhone = phones.customerPhone;
+    view.customerRating = phones.customerRating ?? null;
   }
 
   return view;

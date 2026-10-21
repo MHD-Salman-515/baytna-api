@@ -11,6 +11,8 @@ export interface OfferProjectionInput {
   cityId: string;
   landmark: string;
   sentAt: Date;
+  // Phase 9 — null when the customer has no (non-hidden) reviews yet.
+  customerRating: { average: number; count: number } | null;
 }
 
 /**
@@ -37,5 +39,6 @@ export function toOfferView(input: OfferProjectionInput): Record<string, unknown
     cityId: input.cityId,
     landmark: input.landmark,
     sentAt: input.sentAt,
+    customerRating: input.customerRating,
   };
 }

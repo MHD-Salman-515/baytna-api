@@ -19,4 +19,5 @@ export const SOCKET_EVENT_BY_TYPE: Record<NotificationEventType, string> = {
   [NotificationEventType.WALLET_LOW_BALANCE]: 'wallet:lowBalance',
   [NotificationEventType.WALLET_SUSPENDED]: 'wallet:suspended',
   [NotificationEventType.WALLET_REINSTATED]: 'wallet:reinstated',
+  [NotificationEventType.PANIC_ALERT_TRIGGERED]: 'safety:panicAlert',
 };

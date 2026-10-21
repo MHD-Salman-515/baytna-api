@@ -23,6 +23,7 @@ describe('WorkerProfilesService', () => {
     create: jest.Mock;
     find: jest.Mock;
     countDocuments: jest.Mock;
+    updateOne: jest.Mock;
   };
   let countriesService: { findActiveById: jest.Mock };
   let workerDocumentsService: { hasAllRequiredDocuments: jest.Mock };
@@ -42,6 +43,7 @@ describe('WorkerProfilesService', () => {
       create: jest.fn(),
       find: jest.fn(),
       countDocuments: jest.fn(),
+      updateOne: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue({}) }),
     };
     countriesService = { findActiveById: jest.fn().mockResolvedValue({ code: 'SY' }) };
     workerDocumentsService = { hasAllRequiredDocuments: jest.fn() };
@@ -499,6 +501,25 @@ describe('WorkerProfilesService', () => {
         financialStatus: FinancialStatus.SUSPENDED,
       });
       expect(result).toEqual(['worker-1', 'worker-2']);
+    });
+  });
+
+  describe('setCompletedBookingsCount', () => {
+    it('persists exactly the count it was given, never incrementing', async () => {
+      await service.setCompletedBookingsCount('profile-1', 7);
+
+      expect(profileModel.updateOne).toHaveBeenCalledWith(
+        { _id: 'profile-1' },
+        { completedBookings: 7 },
+      );
+    });
+  });
+
+  describe('setRating', () => {
+    it('persists exactly the rating it was given, never incrementing', async () => {
+      await service.setRating('profile-1', 4.7);
+
+      expect(profileModel.updateOne).toHaveBeenCalledWith({ _id: 'profile-1' }, { rating: 4.7 });
     });
   });
 });

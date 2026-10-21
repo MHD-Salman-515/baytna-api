@@ -22,6 +22,9 @@ export enum NotificationEventType {
   WALLET_LOW_BALANCE = 'WALLET_LOW_BALANCE',
   WALLET_SUSPENDED = 'WALLET_SUSPENDED',
   WALLET_REINSTATED = 'WALLET_REINSTATED',
+  // Admin-facing (Phase 9) — fired at every admin individually, never at a
+  // booking party. See PanicAlertsService.trigger.
+  PANIC_ALERT_TRIGGERED = 'PANIC_ALERT_TRIGGERED',
 }
 
 /**
@@ -47,6 +50,8 @@ export const URGENT_NOTIFICATION_TYPES: ReadonlySet<NotificationEventType> = new
   NotificationEventType.WALLET_REINSTATED,
   // WALLET_LOW_BALANCE stays non-urgent, alongside SCHEDULED_REMINDER — it's
   // a heads-up, not something that just changed her ability to work.
+  // A panic alert is the single most time-sensitive event in the system.
+  NotificationEventType.PANIC_ALERT_TRIGGERED,
 ]);
 
 export function isUrgentNotificationType(type: NotificationEventType): boolean {
@@ -75,5 +80,9 @@ export interface BookingNotificationEvent {
     // payload must never carry what the business actually earned off her.
     balance?: number;
     currency?: string;
+    // PANIC_ALERT_TRIGGERED only. Never an exact address or phone — see
+    // PanicAlertsService.trigger's own comment on what an admin notification
+    // may and may not carry.
+    triggeredByRole?: string;
   };
 }
