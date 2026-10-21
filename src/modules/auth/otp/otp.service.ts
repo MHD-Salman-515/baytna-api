@@ -77,6 +77,7 @@ export class OtpService {
     }
 
     await this.store.delete(e164Phone);
+    await this.sender.markConsumed?.(e164Phone);
   }
 
   private generateCode(): string {

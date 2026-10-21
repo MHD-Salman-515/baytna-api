@@ -14,7 +14,7 @@ describe('OtpService', () => {
     incrementAttempts: jest.Mock;
     recordRequestAndCountInWindow: jest.Mock;
   };
-  let sender: { send: jest.Mock };
+  let sender: { send: jest.Mock; markConsumed?: jest.Mock };
 
   const phone = '+963911111111';
 
@@ -146,6 +146,51 @@ describe('OtpService', () => {
       await expect(service.verifyOtp(phone, sentCode)).resolves.toBeUndefined();
       expect(store.delete).toHaveBeenCalledWith(phone);
       expect(store.incrementAttempts).not.toHaveBeenCalled();
+    });
+
+    it("calls the sender's markConsumed on success, when the sender implements it", async () => {
+      sender.markConsumed = jest.fn().mockResolvedValue(undefined);
+      store.get.mockResolvedValue({
+        codeHash: 'a'.repeat(64),
+        expiresAt: Date.now() + 100_000,
+        attempts: 0,
+        requestedAt: Date.now(),
+      });
+
+      // Reuse the real hash path via requestOtp, same as the test above.
+      store.get.mockResolvedValueOnce(null);
+      store.recordRequestAndCountInWindow.mockResolvedValueOnce(1);
+      let sentCode = '';
+      sender.send.mockImplementationOnce(async (_p: string, c: string) => {
+        sentCode = c;
+      });
+      await service.requestOtp(phone);
+      const [, storedRecord] = store.set.mock.calls[store.set.mock.calls.length - 1] as [
+        string,
+        OtpRecord,
+      ];
+      store.get.mockResolvedValueOnce(storedRecord);
+
+      await service.verifyOtp(phone, sentCode);
+
+      expect(sender.markConsumed).toHaveBeenCalledWith(phone);
+    });
+
+    it('never throws when the sender has no markConsumed at all', async () => {
+      store.get.mockResolvedValueOnce(null);
+      store.recordRequestAndCountInWindow.mockResolvedValueOnce(1);
+      let sentCode = '';
+      sender.send.mockImplementationOnce(async (_p: string, c: string) => {
+        sentCode = c;
+      });
+      await service.requestOtp(phone);
+      const [, storedRecord] = store.set.mock.calls[store.set.mock.calls.length - 1] as [
+        string,
+        OtpRecord,
+      ];
+      store.get.mockResolvedValueOnce(storedRecord);
+
+      await expect(service.verifyOtp(phone, sentCode)).resolves.toBeUndefined();
     });
   });
 });

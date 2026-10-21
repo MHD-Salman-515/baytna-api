@@ -34,6 +34,12 @@ export const envValidationSchema = Joi.object({
   // valid codes — the attacker would also need this value.
   OTP_PEPPER: Joi.string().min(32).required(),
 
+  // Optional. Gates GET /dev/last-otp (StoredOtpSender/DevOtpController —
+  // see README "Dev OTP retrieval"). Never required in production; that
+  // route refuses to even construct when NODE_ENV === 'production'
+  // regardless of whether this is set.
+  DEV_OTP_ACCESS_KEY: Joi.string().min(20).optional(),
+
   // Optional. When set, the OTP store uses Redis (see redis-otp-store.ts);
   // when unset, an in-memory store is used (fine for a single dev/test
   // instance, useless across multiple processes/restarts).

@@ -104,22 +104,56 @@ logging out still works even if your 15-minute access token already expired.
 ### Reading the OTP code in dev
 
 There's no real SMS/WhatsApp sending yet (deferred on purpose — see `OtpSender` below). In
-development, `POST /auth/otp/request` logs the code to the **server console** instead:
+development, `POST /auth/otp/request` logs the code to the **server console**:
 
 ```
 [ConsoleOtpSender (DEV ONLY)] OTP code for +963911111111: 482913 (development mode — not actually sent)
 ```
 
-Watch the terminal running `npm run start:dev` and copy the 6 digits into your `verify` call.
-`ConsoleOtpSender` **refuses to start** (throws at boot) if `NODE_ENV=production` — there is
-deliberately no way to accidentally ship "log the code to stdout" as your production OTP delivery.
-A real `SmsSender`/`WhatsAppSender` implementing the same `OtpSender` interface is future work.
+Watch the terminal running `npm run start:dev` and copy the 6 digits into your `verify` call. The
+sender that prints this (`StoredOtpSender`) **refuses to construct** (throws at boot) if
+`NODE_ENV=production` — there is deliberately no way to accidentally ship "log the code to stdout"
+as your production OTP delivery. A real `SmsSender`/`WhatsAppSender` implementing the same
+`OtpSender` interface is future work.
+
+#### Dev OTP retrieval (staging only — no console access required)
+
+Render's free tier doesn't expose live log streaming, so the console output above is unreachable
+there. `StoredOtpSender` *also* persists the most recent code per phone to `dev_otp_codes`
+(plaintext, `{ phone, code, createdAt, expiresAt, consumed }`, one row per phone — upserted, not
+append-only), and `GET /dev/last-otp?phone=<e164>` reads it back:
+
+```bash
+curl -s "https://your-staging-host/api/v1/dev/last-otp?phone=%2B963911111111" \
+  -H "x-dev-otp-key: $DEV_OTP_ACCESS_KEY"
+# { "code": "482913", "expiresAt": "2026-01-01T00:05:00.000Z" }
+```
+
+This is **structurally impossible in production**, not just disabled by default:
+
+- `DevOtpController`'s constructor throws immediately if `NODE_ENV=production`, regardless of
+  whether `DEV_OTP_ACCESS_KEY` is set — the route doesn't exist on a production boot at all, the
+  same way `StoredOtpSender` itself refuses to construct there.
+- The route requires `DEV_OTP_ACCESS_KEY` as an `x-dev-otp-key` header, compared with
+  `crypto.timingSafeEqual` (same discipline as the OTP hash comparison and presigned storage URLs
+  elsewhere in this app). No key configured, a wrong key, a missing `phone`, or no live code for
+  that phone — **all four return the identical plain 404**, so the response itself never reveals
+  which case happened.
+- A row auto-expires via a Mongo TTL index after 15 minutes regardless of anything else (a cleanup
+  safety net, independent of the OTP's own 5-minute validity window, which is what the endpoint's
+  `expiresAt` filter actually checks); `verifyOtp` also flips `consumed: true` on success, so a
+  code that's already been used is never handed back even inside that window.
+- The plaintext code **never** appears in `/auth/otp/request`'s own response body under any
+  configuration — that response has always been, and remains, `{ message: "..." }` only; this
+  endpoint is the *only* way to read a code back, and only with the dedicated key.
 
 ### Rate limiting and code lifecycle
 
 - Code: 6 digits, `crypto.randomInt` (not `Math.random`), sha256-hashed with a server-side pepper
-  (`OTP_PEPPER`) before storage — the plaintext code is never stored, and only ever logged by
-  `ConsoleOtpSender` in dev.
+  (`OTP_PEPPER`) before storage in the real OTP store — the plaintext code never reaches that
+  store. In dev/staging it's logged and separately persisted to `dev_otp_codes` by
+  `StoredOtpSender` (see "Dev OTP retrieval" above); in production it only ever exists inside
+  whatever real `OtpSender` is wired in.
 - TTL: 5 minutes. Single-use: verifying (success or exhausting attempts) deletes the record.
 - Cooldown: 60 seconds between requests for the same phone (429 otherwise).
 - Max 5 requests per phone per hour, **plus** a separate per-IP throttle on the route itself

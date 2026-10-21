@@ -11,6 +11,7 @@ export interface AppConfig {
   jwtAccessSecret: string;
   jwtRefreshSecret: string;
   otpPepper: string;
+  devOtpAccessKey?: string;
   redisUrl?: string;
   seedAdminPhone?: string;
   publicBaseUrl: string;
@@ -70,6 +71,7 @@ export default (): AppConfig => {
     jwtAccessSecret: process.env.JWT_ACCESS_SECRET as string,
     jwtRefreshSecret: process.env.JWT_REFRESH_SECRET as string,
     otpPepper: process.env.OTP_PEPPER as string,
+    devOtpAccessKey: process.env.DEV_OTP_ACCESS_KEY,
     redisUrl: process.env.REDIS_URL,
     seedAdminPhone: process.env.SEED_ADMIN_PHONE,
     publicBaseUrl: process.env.PUBLIC_BASE_URL ?? `http://localhost:${port}`,
