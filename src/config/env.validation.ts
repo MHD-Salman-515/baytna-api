@@ -96,9 +96,12 @@ export const envValidationSchema = Joi.object({
   SCHEDULED_REMINDER_SWEEP_INTERVAL_SECONDS: Joi.number().integer().positive().default(300),
 
   // --- Notifications / realtime / tracking (Phase 7) ---
-  // 'log' (default) never touches Firebase and needs no credentials — safe
-  // for dev and the test suite. Only 'fcm' requires the three FCM_* vars below.
-  NOTIFICATION_PUSH_PROVIDER: Joi.string().valid('log', 'fcm').default('log'),
+  // 'log' (default) never touches a push provider and needs no credentials
+  // — safe for dev and the test suite. 'fcm' requires the three FCM_* vars
+  // below; 'onesignal' requires the two ONESIGNAL_* vars below. FCM isn't
+  // reliably reachable in every market this app serves — OneSignal is the
+  // verified alternative there; both stay available as a config choice.
+  NOTIFICATION_PUSH_PROVIDER: Joi.string().valid('log', 'fcm', 'onesignal').default('log'),
   FCM_PROJECT_ID: Joi.string().when('NOTIFICATION_PUSH_PROVIDER', {
     is: 'fcm',
     then: Joi.required(),
@@ -109,6 +112,14 @@ export const envValidationSchema = Joi.object({
   }),
   FCM_PRIVATE_KEY: Joi.string().when('NOTIFICATION_PUSH_PROVIDER', {
     is: 'fcm',
+    then: Joi.required(),
+  }),
+  ONESIGNAL_APP_ID: Joi.string().when('NOTIFICATION_PUSH_PROVIDER', {
+    is: 'onesignal',
+    then: Joi.required(),
+  }),
+  ONESIGNAL_REST_API_KEY: Joi.string().when('NOTIFICATION_PUSH_PROVIDER', {
+    is: 'onesignal',
     then: Joi.required(),
   }),
 

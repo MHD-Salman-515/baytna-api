@@ -9,13 +9,15 @@ import { WorkerProfilesService } from '../../workers/worker-profiles.service';
 import { BookingNotifier } from './booking-notifier.interface';
 import { FcmNotifier } from './fcm-notifier';
 import { LogNotifier } from './log-notifier';
+import { OneSignalNotifier } from './onesignal-notifier';
 
 /**
- * Only this one call site ever decides Log vs Fcm — both are constructed
- * by hand here (never registered as their own eagerly-instantiated
- * providers), so FcmNotifier's constructor only ever runs when
- * notifications.pushProvider === 'fcm'. No Firebase credentials are
- * touched otherwise, in dev or in the test suite.
+ * Only this one call site ever decides Log vs Fcm vs OneSignal — all three
+ * are constructed by hand here (never registered as their own
+ * eagerly-instantiated providers), so FcmNotifier/OneSignalNotifier's
+ * constructors only ever run when notifications.pushProvider actually
+ * selects them. No Firebase/OneSignal credentials are touched otherwise,
+ * in dev or in the test suite.
  */
 export function createBookingNotifier(
   preferencesService: NotificationPreferencesService,
@@ -30,6 +32,18 @@ export function createBookingNotifier(
   const provider = configService.get<string>('notifications.pushProvider');
   if (provider === 'fcm') {
     return new FcmNotifier(
+      preferencesService,
+      logService,
+      deviceTokensService,
+      usersService,
+      countriesService,
+      workerProfilesService,
+      moduleRef,
+      configService,
+    );
+  }
+  if (provider === 'onesignal') {
+    return new OneSignalNotifier(
       preferencesService,
       logService,
       deviceTokensService,

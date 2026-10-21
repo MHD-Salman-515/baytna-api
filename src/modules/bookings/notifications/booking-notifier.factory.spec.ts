@@ -9,6 +9,7 @@ import { WorkerProfilesService } from '../../workers/worker-profiles.service';
 import { createBookingNotifier } from './booking-notifier.factory';
 import { FcmNotifier } from './fcm-notifier';
 import { LogNotifier } from './log-notifier';
+import { OneSignalNotifier } from './onesignal-notifier';
 
 jest.mock('firebase-admin', () => ({
   initializeApp: jest.fn(),
@@ -47,5 +48,14 @@ describe('createBookingNotifier', () => {
     const notifier = build({ get: jest.fn().mockReturnValue('fcm') });
 
     expect(notifier).toBeInstanceOf(FcmNotifier);
+    expect(notifier).not.toBeInstanceOf(OneSignalNotifier);
+  });
+
+  it('selects OneSignalNotifier only when pushProvider is "onesignal"', () => {
+    const notifier = build({ get: jest.fn().mockReturnValue('onesignal') });
+
+    expect(notifier).toBeInstanceOf(OneSignalNotifier);
+    expect(notifier).not.toBeInstanceOf(FcmNotifier);
+    expect(notifier).not.toBeInstanceOf(LogNotifier);
   });
 });

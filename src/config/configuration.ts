@@ -35,12 +35,16 @@ export interface AppConfig {
     reminderSweepIntervalSeconds: number;
   };
   notifications: {
-    // 'log' (default — no Firebase credentials needed, safe for dev/test) or 'fcm'.
+    // 'log' (default — no provider credentials needed, safe for dev/test), 'fcm', or 'onesignal'.
     pushProvider: string;
     fcm: {
       projectId?: string;
       clientEmail?: string;
       privateKey?: string;
+    };
+    oneSignal: {
+      appId?: string;
+      restApiKey?: string;
     };
   };
   realtime: {
@@ -110,6 +114,10 @@ export default (): AppConfig => {
         clientEmail: process.env.FCM_CLIENT_EMAIL,
         // .env files commonly escape newlines in a PEM key as literal "\n" — restore them.
         privateKey: process.env.FCM_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+      },
+      oneSignal: {
+        appId: process.env.ONESIGNAL_APP_ID,
+        restApiKey: process.env.ONESIGNAL_REST_API_KEY,
       },
     },
     realtime: {

@@ -909,11 +909,21 @@ The full event catalogue (`NotificationEventType`):
 | `OFFER_TAKEN` | every losing worker | `InstantMatchingService.resolveOffers` |
 | `SCHEDULED_REMINDER` | worker | `ScheduledReminderSweepService`, `reminderLeadMinutes` before `scheduledFor` |
 
-### FCM push: multi-device, locale, and dead tokens
+### Push delivery: FCM, OneSignal, multi-device, locale, and dead tokens
+
+Three interchangeable `BookingNotifier` implementations behind the exact same
+`NOTIFICATION_PUSH_PROVIDER` config switch — `log` (default), `fcm`, or `onesignal`. FCM isn't
+reliably reachable in every market this app serves; OneSignal has been separately verified to
+work there, so it's a config choice rather than a replacement — `FcmNotifier` stays in the
+codebase either way, and switching providers later is changing one env var, not a rewrite.
 
 `DeviceToken` (one row per install, upserted **by token alone** — a reinstall or account switch
 just transfers ownership of that row): `userId`, `token`, `platform`, `appVersion`, `locale`,
-`lastSeenAt`, `isActive`.
+`lastSeenAt`, `isActive`. `token` is deliberately provider-agnostic in the schema — for an
+FCM-registered device it's an FCM registration token; for a OneSignal-registered device it's a
+OneSignal player/subscription id. The client always registers it through the same
+`POST /users/me/device-tokens`; nothing provider-specific lives in the schema or that endpoint —
+only the notifier that eventually reads `token` back out knows which provider's id it is.
 
 | Method | Path | Notes |
 |---|---|---|
@@ -932,6 +942,17 @@ Every active token for a user gets the push (multi-device). `FcmNotifier.sendPus
 true regardless of whose it was) — a stale token fails once, then stops being retried forever. The
 Firebase Admin app itself is lazily initialized on the *first* send, not at boot, and only when
 `FcmNotifier` is actually constructed (i.e. `NOTIFICATION_PUSH_PROVIDER=fcm`).
+
+`OneSignalNotifier.sendPush` posts to `onesignal.com/api/v1/notifications` with
+`include_player_ids` set to the recipient's tokens. OneSignal reports dead ids differently from
+FCM: a response can come back **200 OK** with `errors.invalid_player_ids` listing just the
+specific ids that are no longer subscribed (the rest were still sent) — those, and only those,
+get deactivated. If instead the *entire* batch is dead, OneSignal responds with an HTTP error
+whose `errors` array is a flat list of human-readable strings (no per-id detail at all,
+e.g. `"All included players are not subscribed"`) — `OneSignalNotifier` deactivates every id in
+that batch only when the message text actually says so; any other failure (bad app id, rate
+limit, ...) is logged as an ordinary failed delivery attempt with no deactivation, since it says
+nothing about whether any individual token is still valid.
 
 **Payload safety**: a push/socket payload is built from `NotificationCopy` — `title`, `body`
 (localized ar/en via hand-written templates per event type, chosen from `User.locale`), and a
@@ -1042,8 +1063,9 @@ once and never recomputed on subsequent points.
 
 | Var | Default | Notes |
 |---|---|---|
-| `NOTIFICATION_PUSH_PROVIDER` | `log` | `log` or `fcm` — `log` requires no Firebase credentials |
+| `NOTIFICATION_PUSH_PROVIDER` | `log` | `log`, `fcm`, or `onesignal` — `log` requires no provider credentials |
 | `FCM_PROJECT_ID` / `FCM_CLIENT_EMAIL` / `FCM_PRIVATE_KEY` | — | required only when `NOTIFICATION_PUSH_PROVIDER=fcm` (Joi conditional); a service-account private key, with literal `\n` restored to real newlines |
+| `ONESIGNAL_APP_ID` / `ONESIGNAL_REST_API_KEY` | — | required only when `NOTIFICATION_PUSH_PROVIDER=onesignal` (Joi conditional) |
 | `SCHEDULED_REMINDER_LEAD_MINUTES` | `60` | how long before `scheduledFor` the reminder fires |
 | `SCHEDULED_REMINDER_SWEEP_ENABLED` | `true` | |
 | `SCHEDULED_REMINDER_SWEEP_INTERVAL_SECONDS` | `300` | |
@@ -1054,16 +1076,28 @@ once and never recomputed on subsequent points.
 | `LOCATION_TRAIL_PURGE_SWEEP_ENABLED` | `true` | |
 | `LOCATION_TRAIL_PURGE_SWEEP_INTERVAL_SECONDS` | `300` | |
 
-### Setting up real FCM (optional — `log` works out of the box)
+### Setting up real push (optional — `log` works out of the box)
+
+**FCM:**
 
 1. Firebase console → Project settings → Service accounts → Generate new private key → downloads a
    JSON file with `project_id`, `client_email`, and `private_key`.
 2. Set `NOTIFICATION_PUSH_PROVIDER=fcm`, `FCM_PROJECT_ID`, `FCM_CLIENT_EMAIL`, and `FCM_PRIVATE_KEY`
    (paste the PEM key with literal `\n` for newlines — `.env` files can't hold a real multi-line
    value cleanly) in `.env`.
-3. That's it — `createBookingNotifier` picks `FcmNotifier` up from there; nothing else changes.
-   Leave `NOTIFICATION_PUSH_PROVIDER` unset (or `log`) for development and CI — the test suite never
-   touches Firebase.
+
+**OneSignal** (the verified alternative where FCM isn't reliably reachable):
+
+1. OneSignal dashboard → your app → Settings → Keys & IDs → copy the **OneSignal App ID** and the
+   **REST API Key**.
+2. Set `NOTIFICATION_PUSH_PROVIDER=onesignal`, `ONESIGNAL_APP_ID`, and `ONESIGNAL_REST_API_KEY` in
+   `.env`. Register each device's OneSignal player/subscription id the same way as any other
+   device token — `POST /users/me/device-tokens`, same body shape, same endpoint.
+
+Either way, that's it — `createBookingNotifier` picks the matching notifier up from the one env
+var; nothing else changes, and switching providers later doesn't touch application code. Leave
+`NOTIFICATION_PUSH_PROVIDER` unset (or `log`) for development and CI — the test suite never
+touches Firebase or OneSignal.
 
 ### Tests
 
@@ -1071,8 +1105,10 @@ once and never recomputed on subsequent points.
 suppression for a reminder but never for an urgent type, per-channel suppression, successful
 socket+push delivery, no-active-tokens path, localization, `notifyOffer`'s
 workerProfileId→userId resolution), `fcm-notifier.spec.ts` (multicast payload shape, invalid-token
-deactivation vs. an ordinary transient failure, lazy app init), `booking-notifier.factory.spec.ts`
-(provider selection), `quiet-hours.spec.ts` (overnight/same-day/zero-length windows, explicit
+deactivation vs. an ordinary transient failure, lazy app init), `onesignal-notifier.spec.ts`
+(payload shape, partial invalid-id deactivation vs. whole-batch "not subscribed" deactivation vs.
+an ordinary transient failure), `booking-notifier.factory.spec.ts`
+(provider selection across all three), `quiet-hours.spec.ts` (overnight/same-day/zero-length windows, explicit
 not-server-local-time), `notification-localization.spec.ts` (ar/en selection, leak-prevention,
 every event type in both locales), `device-tokens.service.spec.ts` (register/upsert/ownership
 transfer/deactivation), `notification-preferences.service.spec.ts`, `notification-log.service.spec.ts`,
