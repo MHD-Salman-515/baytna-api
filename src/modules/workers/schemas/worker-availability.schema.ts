@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { BaseSchema, baseSchemaOptions } from '../../../common/schemas/base.schema';
 
 export type WorkerAvailabilityDocument = HydratedDocument<WorkerAvailability>;
@@ -52,7 +52,8 @@ export const DateOverrideSchema = SchemaFactory.createForClass(DateOverride);
 /** One document per worker — GET/PUT /workers/me/availability-windows replaces it wholesale. */
 @Schema({ collection: 'worker_availabilities', ...baseSchemaOptions })
 export class WorkerAvailability extends BaseSchema {
-  @Prop({ type: Types.ObjectId, ref: 'WorkerProfile', required: true })
+  // MongooseSchema.Types.ObjectId — see the project-wide ObjectId-casting audit.
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'WorkerProfile', required: true })
   workerProfileId!: Types.ObjectId;
 
   @Prop({ type: [WeeklyWindowSchema], default: [] })

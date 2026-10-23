@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { BaseSchema, baseSchemaOptions } from '../../../common/schemas/base.schema';
 import { LocalizedText, LocalizedTextSchema } from '../../../common/schemas/localized-text.schema';
 
@@ -29,19 +29,20 @@ export enum FinancialStatus {
 
 @Schema({ collection: 'worker_profiles', ...baseSchemaOptions })
 export class WorkerProfile extends BaseSchema {
-  // No `index: true` here — the partial unique index below already covers
-  // this field, and having both produced a "duplicate schema index" warning.
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true })
+  // MongooseSchema.Types.ObjectId — see the project-wide ObjectId-casting
+  // audit. No `index: true` here — the partial unique index below already
+  // covers this field, and having both produced a "duplicate schema index" warning.
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
   userId!: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'Country', required: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Country', required: true })
   countryId!: Types.ObjectId;
 
   // Nullable: POST /workers/me/apply creates a bare DRAFT profile with no
   // body, before she's ever chosen a city — filled in later via
   // POST /workers/me/profile. Never null by the time she's APPROVED in
   // practice (that route requires it), but not schema-enforced here.
-  @Prop({ type: Types.ObjectId, ref: 'City', default: null })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'City', default: null })
   cityId!: Types.ObjectId | null;
 
   @Prop({ type: LocalizedTextSchema, default: {} })
@@ -53,7 +54,7 @@ export class WorkerProfile extends BaseSchema {
   @Prop({ type: [String], default: [] })
   languages!: string[];
 
-  @Prop({ type: [Types.ObjectId], ref: 'City', default: [] })
+  @Prop({ type: [MongooseSchema.Types.ObjectId], ref: 'City', default: [] })
   serviceAreas!: Types.ObjectId[];
 
   @Prop({ type: String, enum: VerificationStatus, default: VerificationStatus.DRAFT, index: true })
@@ -62,7 +63,7 @@ export class WorkerProfile extends BaseSchema {
   @Prop({ type: LocalizedTextSchema, default: null })
   rejectionReason!: LocalizedText | null;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', default: null })
   reviewedBy!: Types.ObjectId | null;
 
   @Prop({ type: Date, default: null })

@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { BaseSchema, baseSchemaOptions } from '../../../common/schemas/base.schema';
 import { Role } from '../../../common/enums/role.enum';
 import { UserProfile, UserProfileSchema } from './user-profile.schema';
@@ -17,10 +17,11 @@ export class User extends BaseSchema {
   @Prop({ type: String, required: true, trim: true })
   phone!: string; // E.164, e.g. "+963911111111" — normalized by PhoneValidationService before ever reaching here
 
-  @Prop({ type: Types.ObjectId, ref: 'Country', required: true, index: true })
+  // MongooseSchema.Types.ObjectId — see the project-wide ObjectId-casting audit.
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Country', required: true, index: true })
   countryId!: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'City', default: null })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'City', default: null })
   cityId!: Types.ObjectId | null;
 
   // A person can be both a customer and a worker at once, hence an array, not a single role.

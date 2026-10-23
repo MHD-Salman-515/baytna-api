@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { BaseSchema, baseSchemaOptions } from '../../../common/schemas/base.schema';
 import { LocalizedText, LocalizedTextSchema } from '../../../common/schemas/localized-text.schema';
 
@@ -21,7 +21,8 @@ export enum DocumentReviewStatus {
 
 @Schema({ collection: 'worker_documents', ...baseSchemaOptions })
 export class WorkerDocument extends BaseSchema {
-  @Prop({ type: Types.ObjectId, ref: 'WorkerProfile', required: true })
+  // MongooseSchema.Types.ObjectId — see the project-wide ObjectId-casting audit.
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'WorkerProfile', required: true })
   workerProfileId!: Types.ObjectId;
 
   @Prop({ type: String, enum: DocumentType, required: true })
@@ -48,7 +49,7 @@ export class WorkerDocument extends BaseSchema {
   @Prop({ type: LocalizedTextSchema, default: null })
   rejectionReason!: LocalizedText | null;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', default: null })
   reviewedBy!: Types.ObjectId | null;
 
   @Prop({ type: Date, default: null })

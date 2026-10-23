@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 
 export type RefreshTokenDocument = HydratedDocument<RefreshToken>;
 
@@ -17,7 +17,10 @@ export enum RefreshTokenStatus {
  */
 @Schema({ collection: 'refresh_tokens', timestamps: true })
 export class RefreshToken {
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true, index: true })
+  // MongooseSchema.Types.ObjectId, not the bare `Types.ObjectId` value class —
+  // @nestjs/mongoose silently mistypes the latter as Mixed (see the project-
+  // wide ObjectId-casting audit; this file was part of the batch fix).
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true, index: true })
   userId!: Types.ObjectId;
 
   // Persists across every rotation in a session's lineage; used to revoke an

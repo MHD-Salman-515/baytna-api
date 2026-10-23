@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 
 export type WalletEntryDocument = HydratedDocument<WalletEntry>;
 
@@ -29,10 +29,11 @@ export enum WalletEntryType {
  */
 @Schema({ collection: 'wallet_entries', timestamps: { createdAt: 'createdAt', updatedAt: false } })
 export class WalletEntry {
-  @Prop({ type: Types.ObjectId, ref: 'Wallet', required: true, index: true })
+  // MongooseSchema.Types.ObjectId — see the project-wide ObjectId-casting audit.
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Wallet', required: true, index: true })
   walletId!: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'Booking', default: null })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Booking', default: null })
   bookingId!: Types.ObjectId | null;
 
   @Prop({ type: String, enum: WalletEntryType, required: true })
@@ -59,11 +60,11 @@ export class WalletEntry {
 
   // null for a system-initiated entry (a commission charge, a cancellation
   // penalty) — set to the admin's userId for TOPUP/ADJUSTMENT/REVERSAL.
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', default: null })
   createdBy!: Types.ObjectId | null;
 
   // Set only on a REVERSAL entry — the original entry it corrects.
-  @Prop({ type: Types.ObjectId, ref: 'WalletEntry', default: null })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'WalletEntry', default: null })
   reversesEntryId!: Types.ObjectId | null;
 
   @Prop({ type: Object, default: {} })

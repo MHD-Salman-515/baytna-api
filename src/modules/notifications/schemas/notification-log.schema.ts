@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 
 export type NotificationLogDocument = HydratedDocument<NotificationLog>;
 
@@ -23,7 +23,8 @@ export enum NotificationOutcome {
  */
 @Schema({ collection: 'notification_logs', timestamps: { createdAt: 'sentAt', updatedAt: false } })
 export class NotificationLog {
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true, index: true })
+  // MongooseSchema.Types.ObjectId — see the project-wide ObjectId-casting audit.
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true, index: true })
   userId!: Types.ObjectId;
 
   @Prop({ type: String, required: true, index: true })

@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { GeoPoint, GeoPointSchema } from '../../cities/schemas/city.schema';
 
 export type BookingLocationTrailDocument = HydratedDocument<BookingLocationTrail>;
@@ -26,9 +26,10 @@ export const LocationTrailPointSchema = SchemaFactory.createForClass(LocationTra
  */
 @Schema({ collection: 'booking_location_trails' })
 export class BookingLocationTrail {
-  // No `unique: true` here — the explicit index below already covers this
-  // field, and having both produced a "duplicate schema index" warning.
-  @Prop({ type: Types.ObjectId, ref: 'Booking', required: true })
+  // MongooseSchema.Types.ObjectId — see the project-wide ObjectId-casting
+  // audit. No `unique: true` here — the explicit index below already covers
+  // this field, and having both produced a "duplicate schema index" warning.
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Booking', required: true })
   bookingId!: Types.ObjectId;
 
   @Prop({ type: [LocationTrailPointSchema], default: [] })

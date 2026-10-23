@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { BaseSchema, baseSchemaOptions } from '../../../common/schemas/base.schema';
 import { PricingType } from '../../../common/enums/pricing-type.enum';
 
@@ -14,10 +14,11 @@ export type ServicePricingRuleDocument = HydratedDocument<ServicePricingRule>;
  */
 @Schema({ collection: 'service_pricing_rules', ...baseSchemaOptions })
 export class ServicePricingRule extends BaseSchema {
-  @Prop({ type: Types.ObjectId, ref: 'Service', required: true })
+  // MongooseSchema.Types.ObjectId — see the project-wide ObjectId-casting audit.
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Service', required: true })
   serviceId!: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'Country', required: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Country', required: true })
   countryId!: Types.ObjectId;
 
   @Prop({ type: String, enum: PricingType, required: true })

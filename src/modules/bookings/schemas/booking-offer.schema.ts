@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { BaseSchema, baseSchemaOptions } from '../../../common/schemas/base.schema';
 
 export type BookingOfferDocument = HydratedDocument<BookingOffer>;
@@ -25,16 +25,20 @@ export enum BookingOfferOutcome {
  */
 @Schema({ collection: 'booking_offers', ...baseSchemaOptions })
 export class BookingOffer extends BaseSchema {
-  @Prop({ type: Types.ObjectId, ref: 'Booking', required: true })
+  // MongooseSchema.Types.ObjectId — see the project-wide ObjectId-casting
+  // audit. bookingId was already consistently written as a real ObjectId
+  // (from booking._id, see acceptOffer/instant-matching.service.ts), so this
+  // fix is a no-op for it; workerProfileId/workerServiceId below were not.
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Booking', required: true })
   bookingId!: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'WorkerProfile', required: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'WorkerProfile', required: true })
   workerProfileId!: Types.ObjectId;
 
   // This candidate's own offering for the booking's service — her price
   // preview below is computed against this, not against whichever
   // WorkerService eventually wins.
-  @Prop({ type: Types.ObjectId, ref: 'WorkerService', required: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'WorkerService', required: true })
   workerServiceId!: Types.ObjectId;
 
   @Prop({ type: Number, required: true, min: 0 })

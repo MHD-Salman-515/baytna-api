@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { BaseSchema, baseSchemaOptions } from '../../../common/schemas/base.schema';
 import { GeoPoint, GeoPointSchema } from '../../cities/schemas/city.schema';
 
@@ -14,7 +14,8 @@ export type WorkerPresenceDocument = HydratedDocument<WorkerPresence>;
  */
 @Schema({ collection: 'worker_presences', ...baseSchemaOptions })
 export class WorkerPresence extends BaseSchema {
-  @Prop({ type: Types.ObjectId, ref: 'WorkerProfile', required: true })
+  // MongooseSchema.Types.ObjectId — see the project-wide ObjectId-casting audit.
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'WorkerProfile', required: true })
   workerProfileId!: Types.ObjectId;
 
   @Prop({ type: Boolean, default: false })

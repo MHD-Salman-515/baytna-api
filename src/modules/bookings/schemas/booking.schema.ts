@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { BaseSchema, baseSchemaOptions } from '../../../common/schemas/base.schema';
 import { BookingStatus } from '../../../common/enums/booking-status.enum';
 import { BookingType } from '../../../common/enums/booking-type.enum';
@@ -80,7 +80,8 @@ export const BookingPricingSnapshotSchema = SchemaFactory.createForClass(Booking
 
 @Schema({ _id: false })
 export class BookingCancellation {
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true })
+  // MongooseSchema.Types.ObjectId — see the project-wide ObjectId-casting audit.
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
   byUserId!: Types.ObjectId;
 
   @Prop({ type: String, enum: Role, required: true })
@@ -126,16 +127,16 @@ export class Booking extends BaseSchema {
   @Prop({ type: String, required: true })
   bookingNumber!: string;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
   customerId!: Types.ObjectId;
 
   // Null while an INSTANT booking is SEARCHING — nobody has won it yet.
   // Always set for SCHEDULED (chosen at creation) and for any INSTANT
   // booking once ACCEPTED (whoever won the broadcast).
-  @Prop({ type: Types.ObjectId, ref: 'WorkerProfile', default: null })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'WorkerProfile', default: null })
   workerProfileId!: Types.ObjectId | null;
 
-  @Prop({ type: Types.ObjectId, ref: 'Service', required: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Service', required: true })
   serviceId!: Types.ObjectId;
 
   // Null until a worker is known — same reasoning as workerProfileId. An
@@ -143,13 +144,13 @@ export class Booking extends BaseSchema {
   // this is only resolved once someone actually wins the broadcast (see
   // BookingsService.acceptOffer), since different workers offering the same
   // service may price it differently or even use a different pricingType.
-  @Prop({ type: Types.ObjectId, ref: 'WorkerService', default: null })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'WorkerService', default: null })
   workerServiceId!: Types.ObjectId | null;
 
-  @Prop({ type: Types.ObjectId, ref: 'Country', required: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Country', required: true })
   countryId!: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'City', required: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'City', required: true })
   cityId!: Types.ObjectId;
 
   @Prop({ type: String, enum: BookingType, required: true })

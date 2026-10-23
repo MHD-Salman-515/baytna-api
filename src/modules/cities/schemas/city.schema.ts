@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { BaseSchema, baseSchemaOptions } from '../../../common/schemas/base.schema';
 import { LocalizedName, LocalizedNameSchema } from '../../../common/schemas/localized-name.schema';
 
@@ -18,7 +18,10 @@ export const GeoPointSchema = SchemaFactory.createForClass(GeoPoint);
 
 @Schema({ collection: 'cities', ...baseSchemaOptions })
 export class City extends BaseSchema {
-  @Prop({ type: Types.ObjectId, ref: 'Country', required: true, index: true })
+  // MongooseSchema.Types.ObjectId — see the project-wide ObjectId-casting audit;
+  // mongoose.Types.ObjectId (the BSON value class) is silently mistyped as Mixed
+  // by @nestjs/mongoose.
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Country', required: true, index: true })
   countryId!: Types.ObjectId;
 
   @Prop({ type: LocalizedNameSchema, required: true })

@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 
 export type AuditLogDocument = HydratedDocument<AuditLog>;
 
@@ -56,8 +56,9 @@ export enum AuditAction {
  */
 @Schema({ collection: 'audit_logs', timestamps: { createdAt: 'timestamp', updatedAt: false } })
 export class AuditLog {
+  // MongooseSchema.Types.ObjectId — see the project-wide ObjectId-casting audit.
   // null for actions taken by a script rather than an admin (e.g. the retention purge).
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null, index: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', default: null, index: true })
   actorUserId!: Types.ObjectId | null;
 
   @Prop({ type: String, enum: AuditAction, required: true, index: true })
@@ -66,7 +67,8 @@ export class AuditLog {
   @Prop({ type: String, required: true })
   targetType!: string;
 
-  @Prop({ type: Types.ObjectId, required: true, index: true })
+  // No `ref` — polymorphic, varies by targetType, same as Review.subjectId.
+  @Prop({ type: MongooseSchema.Types.ObjectId, required: true, index: true })
   targetId!: Types.ObjectId;
 
   @Prop({ type: String, default: null })

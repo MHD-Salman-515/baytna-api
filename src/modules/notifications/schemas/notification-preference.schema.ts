@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { BaseSchema, baseSchemaOptions } from '../../../common/schemas/base.schema';
 
 export type NotificationPreferenceDocument = HydratedDocument<NotificationPreference>;
@@ -36,7 +36,8 @@ export const QuietHoursSchema = SchemaFactory.createForClass(QuietHours);
  */
 @Schema({ collection: 'notification_preferences', ...baseSchemaOptions })
 export class NotificationPreference extends BaseSchema {
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true })
+  // MongooseSchema.Types.ObjectId — see the project-wide ObjectId-casting audit.
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
   userId!: Types.ObjectId;
 
   // Notification event types (see notification-event.ts) this user never
