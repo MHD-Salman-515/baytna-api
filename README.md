@@ -1491,6 +1491,28 @@ npm run env:check
 | `npm run db:reset` | `docker compose down -v && docker compose up -d` (wipes volumes, fresh DB) |
 | `npm run db:logs` | tails the MongoDB container logs |
 
+### Resetting the dev database
+
+`npm run db:reset-dev -- --confirm` wipes every collection in the configured database and
+re-runs the seeder — different from `db:reset` above (which only resets the local Docker
+volumes). This is how the project-wide ObjectId schema fix below was actually rolled out: every
+pre-existing id field across nine phases of demo data had been silently stored as a plain string
+(see "Running this in production"), and rather than migrate that demo data in place, every
+collection was wiped and reseeded once the schemas were corrected, so every document was written
+through the fixed schemas from the start.
+
+Three independent gates, since this is destructive and this dev database happens to be a shared
+Atlas cluster, not a disposable local container:
+- `--confirm` must be passed explicitly.
+- `NODE_ENV` must literally be `development`.
+- The `MONGODB_URI` host must look local, or `ALLOW_REMOTE_SEED=true` must be set (the exact
+  guard `npm run seed` already uses — this is how `db:reset-dev` is actually meant to be run
+  against this project's own Atlas-hosted dev database).
+
+```bash
+NODE_ENV=development ALLOW_REMOTE_SEED=true npm run db:reset-dev -- --confirm
+```
+
 ### DNS / connection diagnostics
 
 ```bash
@@ -1971,10 +1993,35 @@ deployment at real users and real money.
   don't do it mid-incident without warning.
 - **Demo data cleanup**: every phase in this project was demoed against the same long-lived Atlas
   cluster with real seed data plus whatever each live demo created (test bookings, wallets,
-  reviews, panic alerts, reports, trusted contacts). None of it is tagged as demo data. Before
-  pointing this database at real users, either start a fresh cluster/database or audit and purge
-  every collection by hand — there is no "wipe demo data" script, deliberately: writing one that's
-  safe to run against a database that might also hold real data by then is a bigger, separate task.
+  reviews, panic alerts, reports, trusted contacts). `npm run db:reset-dev -- --confirm` (see
+  "Resetting the dev database" above) wipes every collection and re-seeds — but it's gated to
+  `NODE_ENV=development` specifically because it must never be reachable from a production
+  environment. Before pointing a *different*, production database at real users, there's nothing
+  to clean up (it never touched the dev data in the first place) — just make sure the production
+  deploy's env vars point at that fresh database, not this project's dev Atlas cluster.
+- **Project-wide ObjectId schema casting**: every `@Prop` across every schema in this project (all
+  nine phases) declared `type: Types.ObjectId` — the BSON *value* class — where `@nestjs/mongoose`
+  actually needs `mongoose.Schema.Types.ObjectId` (the SchemaType). Fed the former, it silently
+  collapses the field to `Mixed` with no casting, so the field is stored as whatever type it
+  happened to be written with (almost always a plain string, since that's what a route handler or
+  DTO typically passes). This was invisible for nine phases because every `.find()`/`.populate()`
+  query stays internally self-consistent either way, and only broke once Phase 9 added the first
+  raw `new Types.ObjectId(x)` comparisons inside aggregation pipelines. Every schema is now
+  corrected (`src/modules/**/*.schema.ts`, all using `MongooseSchema.Types.ObjectId`) — but that
+  fix only applies going forward; it does nothing to data already stored as a string.
+  `npm run ids:migrate` (dry-run by default, idempotent, `--apply` to actually write, never
+  touches a value that isn't a real ObjectId or a valid 24-hex-char string) and
+  `npm run ids:verify` (read-only, asserts every id field everywhere is a real ObjectId, non-zero
+  exit on drift) both exist in the repo specifically for the day a database holding real,
+  irreplaceable data needs this fix applied retroactively. Neither was ever run against this
+  project's own dev database — `npm run db:reset-dev` was used instead (see above), since every
+  document there was disposable demo data with nothing worth migrating. Before running
+  `ids:migrate --apply` against a database that matters: take a snapshot/backup first (Atlas:
+  Cluster → Backup → "Take Snapshot Now", confirmed *completed*, not just queued), and deploy the
+  corrected schemas and run the migration in the same maintenance window — Mongoose casts both
+  writes and query filters once a field is correctly typed, so a window where the code is fixed
+  but the data isn't (or vice versa) makes existing documents briefly invisible to exact-match
+  queries either way.
 - **Redis** (Phase 2 OTP state, Phase 7 socket.io adapter): both are optional and fall back to
   in-process state (`REDIS_URL` unset, `WEBSOCKET_REDIS_ADAPTER_ENABLED=false`) — fine for a single
   instance, broken for OTP consistency and socket fan-out across more than one. Required once this

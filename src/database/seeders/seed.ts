@@ -34,7 +34,8 @@ function summarize(label: string, outcomes: UpsertOutcome[]): void {
   );
 }
 
-async function bootstrap(): Promise<void> {
+/** Exported so db-reset-dev.ts can run the same seeding logic after wiping, without shelling out to a second process. */
+export async function runSeed(): Promise<void> {
   logger.log(`Env file: ${envFilePath}`);
   assertValidEnv();
   assertLocalMongoUri(process.env.MONGODB_URI as string);
@@ -180,8 +181,12 @@ async function bootstrap(): Promise<void> {
   }
 }
 
-bootstrap().catch((error: unknown) => {
-  const message = error instanceof Error ? error.message : String(error);
-  logger.error(redactMongoUrisInText(message));
-  process.exit(1);
-});
+// Only runs when this file is executed directly (`npm run seed`) — importing
+// `runSeed` from db-reset-dev.ts must not also trigger this standalone invocation.
+if (require.main === module) {
+  runSeed().catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error(redactMongoUrisInText(message));
+    process.exit(1);
+  });
+}
