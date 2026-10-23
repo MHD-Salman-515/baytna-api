@@ -210,7 +210,10 @@ export class BookingsService {
       customerId,
       workerProfileId,
       serviceId: service.id,
-      workerServiceId: dto.workerServiceId,
+      // The resolved document's own id, not a direct echo of the client-
+      // supplied DTO value — same assignment acceptOffer() now makes for
+      // the INSTANT path, see its own comment.
+      workerServiceId: workerService.id,
       countryId: country.id,
       cityId: dto.cityId,
       type: BookingType.SCHEDULED,
@@ -309,7 +312,12 @@ export class BookingsService {
       workerProfileId,
       booking.serviceId.toString(),
     );
-    booking.workerServiceId = workerService._id;
+    // The resolved document's own id, cast the same way every other
+    // ObjectId-typed field assignment in this app does — never a raw
+    // `._id` instance. See createScheduled's identical assignment below;
+    // both paths now do the same thing instead of one passing a string and
+    // the other a raw ObjectId.
+    booking.workerServiceId = workerService.id as unknown as BookingDocument['workerServiceId'];
 
     const quote = await this.pricingService.quote(workerService.id as string, {
       estimatedHours: booking.pendingQuoteParams?.estimatedHours ?? undefined,
