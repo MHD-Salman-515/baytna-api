@@ -71,7 +71,9 @@ async function bootstrap(): Promise<void> {
         }
         if (bad > 0) {
           driftCount += bad;
-          logger.error(`[DRIFT] ${spec.collection}.${spec.field}[]: ${bad} non-ObjectId element(s)`);
+          logger.error(
+            `[DRIFT] ${spec.collection}.${spec.field}[]: ${bad} non-ObjectId element(s)`,
+          );
         } else {
           logger.log(`[OK] ${spec.collection}.${spec.field}[]`);
         }
@@ -84,7 +86,8 @@ async function bootstrap(): Promise<void> {
         let bad = 0;
         for (const doc of docs) {
           for (const el of (doc[spec.field] ?? []) as Array<Record<string, unknown>>) {
-            if (!(el[spec.subField!] instanceof Types.ObjectId) && el[spec.subField!] != null) bad++;
+            if (!(el[spec.subField!] instanceof Types.ObjectId) && el[spec.subField!] != null)
+              bad++;
           }
         }
         if (bad > 0) {

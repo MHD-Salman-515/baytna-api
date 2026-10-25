@@ -185,11 +185,7 @@ async function auditOrMigrateScalarArray(
               input: `$${field}`,
               as: 'el',
               in: {
-                $cond: [
-                  { $eq: [{ $type: '$$el' }, 'string'] },
-                  { $toObjectId: '$$el' },
-                  '$$el',
-                ],
+                $cond: [{ $eq: [{ $type: '$$el' }, 'string'] }, { $toObjectId: '$$el' }, '$$el'],
               },
             },
           },
