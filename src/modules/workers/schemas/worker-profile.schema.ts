@@ -63,6 +63,13 @@ export class WorkerProfile extends BaseSchema {
   @Prop({ type: LocalizedTextSchema, default: null })
   rejectionReason!: LocalizedText | null;
 
+  // Set once, on the DRAFT -> PENDING_REVIEW transition (WorkerProfilesService.submit).
+  // Distinct from createdAt (profile creation) and updatedAt (changes on every
+  // save, including unrelated edits) — this is what lets the admin queue show
+  // how long she's actually been waiting, and sort by it.
+  @Prop({ type: Date, default: null })
+  submittedAt!: Date | null;
+
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', default: null })
   reviewedBy!: Types.ObjectId | null;
 

@@ -428,6 +428,139 @@ describe('WorkerDocumentsService', () => {
     });
   });
 
+  describe('getMissingApprovedDocumentTypes', () => {
+    const required = [
+      DocumentType.NATIONAL_ID_FRONT,
+      DocumentType.NATIONAL_ID_BACK,
+      DocumentType.CRIMINAL_RECORD,
+    ];
+
+    it('names a required type that is missing entirely', async () => {
+      documentModel.find.mockReturnValue({
+        exec: jest.fn().mockResolvedValue([
+          {
+            type: DocumentType.NATIONAL_ID_FRONT,
+            status: DocumentReviewStatus.APPROVED,
+            expiresAt: null,
+          },
+          {
+            type: DocumentType.CRIMINAL_RECORD,
+            status: DocumentReviewStatus.APPROVED,
+            expiresAt: new Date('2099-01-01'),
+          },
+        ]),
+      });
+      expect(await service.getMissingApprovedDocumentTypes('profile-1', required)).toEqual([
+        DocumentType.NATIONAL_ID_BACK,
+      ]);
+    });
+
+    it('names a required type whose only document is still PENDING — approval needs more than submission', async () => {
+      documentModel.find.mockReturnValue({
+        exec: jest.fn().mockResolvedValue([
+          {
+            type: DocumentType.NATIONAL_ID_FRONT,
+            status: DocumentReviewStatus.APPROVED,
+            expiresAt: null,
+          },
+          {
+            type: DocumentType.NATIONAL_ID_BACK,
+            status: DocumentReviewStatus.PENDING,
+            expiresAt: null,
+          },
+          {
+            type: DocumentType.CRIMINAL_RECORD,
+            status: DocumentReviewStatus.APPROVED,
+            expiresAt: new Date('2099-01-01'),
+          },
+        ]),
+      });
+      expect(await service.getMissingApprovedDocumentTypes('profile-1', required)).toEqual([
+        DocumentType.NATIONAL_ID_BACK,
+      ]);
+    });
+
+    it('names a required type whose only document was REJECTED', async () => {
+      documentModel.find.mockReturnValue({
+        exec: jest.fn().mockResolvedValue([
+          {
+            type: DocumentType.NATIONAL_ID_FRONT,
+            status: DocumentReviewStatus.REJECTED,
+            expiresAt: null,
+          },
+          {
+            type: DocumentType.NATIONAL_ID_BACK,
+            status: DocumentReviewStatus.APPROVED,
+            expiresAt: null,
+          },
+          {
+            type: DocumentType.CRIMINAL_RECORD,
+            status: DocumentReviewStatus.APPROVED,
+            expiresAt: new Date('2099-01-01'),
+          },
+        ]),
+      });
+      expect(await service.getMissingApprovedDocumentTypes('profile-1', required)).toEqual([
+        DocumentType.NATIONAL_ID_FRONT,
+      ]);
+    });
+
+    it('names CRIMINAL_RECORD when its approved document has already expired', async () => {
+      documentModel.find.mockReturnValue({
+        exec: jest.fn().mockResolvedValue([
+          {
+            type: DocumentType.NATIONAL_ID_FRONT,
+            status: DocumentReviewStatus.APPROVED,
+            expiresAt: null,
+          },
+          {
+            type: DocumentType.NATIONAL_ID_BACK,
+            status: DocumentReviewStatus.APPROVED,
+            expiresAt: null,
+          },
+          {
+            type: DocumentType.CRIMINAL_RECORD,
+            status: DocumentReviewStatus.APPROVED,
+            expiresAt: new Date('2000-01-01'),
+          },
+        ]),
+      });
+      expect(await service.getMissingApprovedDocumentTypes('profile-1', required)).toEqual([
+        DocumentType.CRIMINAL_RECORD,
+      ]);
+    });
+
+    it('names every required type when none exist at all — the exact state found in live staging', async () => {
+      documentModel.find.mockReturnValue({ exec: jest.fn().mockResolvedValue([]) });
+      expect(await service.getMissingApprovedDocumentTypes('profile-1', required)).toEqual(
+        required,
+      );
+    });
+
+    it('returns an empty list once every required type has an APPROVED (and unexpired) document', async () => {
+      documentModel.find.mockReturnValue({
+        exec: jest.fn().mockResolvedValue([
+          {
+            type: DocumentType.NATIONAL_ID_FRONT,
+            status: DocumentReviewStatus.APPROVED,
+            expiresAt: null,
+          },
+          {
+            type: DocumentType.NATIONAL_ID_BACK,
+            status: DocumentReviewStatus.APPROVED,
+            expiresAt: null,
+          },
+          {
+            type: DocumentType.CRIMINAL_RECORD,
+            status: DocumentReviewStatus.APPROVED,
+            expiresAt: new Date('2099-01-01'),
+          },
+        ]),
+      });
+      expect(await service.getMissingApprovedDocumentTypes('profile-1', required)).toEqual([]);
+    });
+  });
+
   describe('getApprovedProfilePhotoUrl', () => {
     it('returns null when no approved profile photo exists', async () => {
       documentModel.findOne.mockReturnValue(chainable(null));

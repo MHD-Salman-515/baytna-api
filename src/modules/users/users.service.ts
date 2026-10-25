@@ -98,6 +98,14 @@ export class UsersService {
       .exec();
   }
 
+  /** Batch lookup for enriching a page of other-domain results (e.g. the admin worker queue) with name/phone — includes soft-deleted users, same "admin sees everything" discipline as WorkerProfilesService.getForAdmin. */
+  async findManyByIds(ids: string[]): Promise<UserDocument[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+    return this.userModel.find({ _id: { $in: ids } }).exec();
+  }
+
   /** Phase 9: every currently-active admin, for fan-out notifications (panic alerts) — never a single hardcoded recipient. */
   async findAdminIds(): Promise<string[]> {
     const admins = await this.userModel

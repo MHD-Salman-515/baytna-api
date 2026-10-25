@@ -166,7 +166,7 @@ export class AdminConsoleService {
     } as never;
 
     const [profile, documents, services, bookings, reviews, wallet, reports] = await Promise.all([
-      this.workerProfilesService.getForAdmin(workerProfileId),
+      this.workerProfilesService.getForAdminWithUser(workerProfileId),
       this.workerDocumentsService.listForAdmin(workerProfileId),
       this.workerServicesService.listForAdmin(workerProfileId),
       this.bookingsService.listForAdmin(bookingsQuery),

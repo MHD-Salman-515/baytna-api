@@ -226,6 +226,33 @@ export class WorkerDocumentsService {
   }
 
   /**
+   * Approval-time gate: stricter than hasAllRequiredDocuments, which only
+   * blocks on an outright REJECTED document so a worker can submit for
+   * review. Being cleared to actually do the job is a higher bar — every
+   * required type must have a document that an admin has explicitly
+   * APPROVED, not merely submitted/pending. Returns the required types that
+   * are NOT yet satisfied, so the caller can name them in the error.
+   */
+  async getMissingApprovedDocumentTypes(
+    workerProfileId: string,
+    requiredTypes: DocumentType[],
+  ): Promise<DocumentType[]> {
+    const documents = await this.documentModel.find({ workerProfileId, isDeleted: false }).exec();
+    const now = new Date();
+
+    return requiredTypes.filter(
+      (requiredType) =>
+        !documents.some(
+          (document) =>
+            document.type === requiredType &&
+            document.status === DocumentReviewStatus.APPROVED &&
+            (requiredType !== DocumentType.CRIMINAL_RECORD ||
+              (document.expiresAt !== null && document.expiresAt > now)),
+        ),
+    );
+  }
+
+  /**
    * For the public projection only — deliberately NOT audit-logged. The
    * audit requirement is specifically about admin document review access,
    * not every customer page view of a public profile photo.

@@ -24,13 +24,13 @@ export class WorkersAdminController {
 
   @Get()
   listQueue(@Query() query: AdminFindWorkersQueryDto) {
-    return this.workerProfilesService.listForAdmin(query);
+    return this.workerProfilesService.listForAdminWithUsers(query);
   }
 
   @Get(':id')
   async getOne(@Param('id') id: string) {
     const [profile, documents] = await Promise.all([
-      this.workerProfilesService.getForAdmin(id),
+      this.workerProfilesService.getForAdminWithUser(id),
       this.workerDocumentsService.listForAdmin(id),
     ]);
     return { profile, documents };

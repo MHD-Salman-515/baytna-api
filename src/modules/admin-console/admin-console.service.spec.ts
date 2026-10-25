@@ -29,6 +29,7 @@ describe('AdminConsoleService', () => {
   let workerProfilesService: {
     listForAdmin: jest.Mock;
     getForAdmin: jest.Mock;
+    getForAdminWithUser: jest.Mock;
     getOwn: jest.Mock;
     getAverageRating: jest.Mock;
   };
@@ -56,6 +57,7 @@ describe('AdminConsoleService', () => {
     workerProfilesService = {
       listForAdmin: jest.fn().mockResolvedValue(paginated([], 0)),
       getForAdmin: jest.fn().mockResolvedValue({ id: 'profile-1' }),
+      getForAdminWithUser: jest.fn().mockResolvedValue({ id: 'profile-1', name: 'Jane Worker' }),
       getOwn: jest.fn(),
       getAverageRating: jest.fn().mockResolvedValue(4.2),
     };
@@ -181,7 +183,7 @@ describe('AdminConsoleService', () => {
     it('pulls together every sub-resource via the existing admin-facing service methods', async () => {
       await service.getWorker360('profile-1');
 
-      expect(workerProfilesService.getForAdmin).toHaveBeenCalledWith('profile-1');
+      expect(workerProfilesService.getForAdminWithUser).toHaveBeenCalledWith('profile-1');
       expect(workerDocumentsService.listForAdmin).toHaveBeenCalledWith('profile-1');
       expect(workerServicesService.listForAdmin).toHaveBeenCalledWith('profile-1');
       expect(bookingsService.listForAdmin).toHaveBeenCalledWith(

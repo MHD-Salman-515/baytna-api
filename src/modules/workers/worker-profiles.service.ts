@@ -13,6 +13,7 @@ import { AuditAction } from '../audit-log/schemas/audit-log.schema';
 import { CountriesService } from '../countries/countries.service';
 import { UserStatus } from '../users/schemas/user.schema';
 import { UsersService } from '../users/users.service';
+import { AdminWorkerProfile, toAdminWorkerProfile } from './admin-worker-projection';
 import { AdminFindWorkersQueryDto } from './dto/admin-find-workers-query.dto';
 import { ReviewWorkerDto } from './dto/review-worker.dto';
 import { UpsertWorkerProfileDto } from './dto/upsert-worker-profile.dto';
@@ -148,11 +149,14 @@ export class WorkerProfilesService {
 
     profile.verificationStatus = VerificationStatus.PENDING_REVIEW;
     profile.rejectionReason = null;
+    profile.submittedAt = new Date();
     await profile.save();
     return profile;
   }
 
-  async listForAdmin(query: AdminFindWorkersQueryDto): Promise<PaginatedResult<WorkerProfile>> {
+  async listForAdmin(
+    query: AdminFindWorkersQueryDto,
+  ): Promise<PaginatedResult<WorkerProfileDocument>> {
     const filter = query.status ? { verificationStatus: query.status } : {};
     const [data, total] = await Promise.all([
       this.profileModel
@@ -173,6 +177,39 @@ export class WorkerProfilesService {
       throw new NotFoundException('Worker profile not found');
     }
     return profile;
+  }
+
+  /**
+   * Admin-facing list, enriched with her name/phone (toAdminWorkerProfile) —
+   * an admin reviewing the verification queue needs to know who she's
+   * looking at, not just an ObjectId. The public worker projection stays
+   * completely untouched; this is a separate, admin-only path.
+   */
+  async listForAdminWithUsers(
+    query: AdminFindWorkersQueryDto,
+  ): Promise<PaginatedResult<AdminWorkerProfile>> {
+    const { data: profiles, meta } = await this.listForAdmin(query);
+    const users = await this.usersService.findManyByIds(
+      profiles.map((profile) => profile.userId.toString()),
+    );
+    const usersById = new Map(users.map((user) => [user.id as string, user]));
+    const data = profiles.map((profile) =>
+      toAdminWorkerProfile(
+        { ...profile.toObject(), id: profile.id as string },
+        usersById.get(profile.userId.toString()) ?? null,
+      ),
+    );
+    return { data, meta };
+  }
+
+  /** Admin-facing single-profile read, enriched the same way as listForAdminWithUsers. */
+  async getForAdminWithUser(workerProfileId: string): Promise<AdminWorkerProfile> {
+    const profile = await this.getForAdmin(workerProfileId);
+    const user = await this.usersService.findManyByIds([profile.userId.toString()]);
+    return toAdminWorkerProfile(
+      { ...profile.toObject(), id: profile.id as string },
+      user[0] ?? null,
+    );
   }
 
   /**
@@ -286,6 +323,20 @@ export class WorkerProfilesService {
 
     if (dto.action === 'reject' && !dto.reason?.ar && !dto.reason?.en) {
       throw new BadRequestException('A reason is required when rejecting a worker');
+    }
+
+    if (dto.action === 'approve') {
+      const country = await this.countriesService.findActiveById(profile.countryId.toString());
+      const requiredTypes = getRequiredDocumentTypes(country.code);
+      const missing = await this.workerDocumentsService.getMissingApprovedDocumentTypes(
+        profile.id as string,
+        requiredTypes,
+      );
+      if (missing.length > 0) {
+        throw new BadRequestException(
+          `Cannot approve: the following required documents are not yet approved: ${missing.join(', ')}`,
+        );
+      }
     }
 
     profile.verificationStatus = targetStatus;

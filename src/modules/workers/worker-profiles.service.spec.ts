@@ -27,7 +27,10 @@ describe('WorkerProfilesService', () => {
     aggregate: jest.Mock;
   };
   let countriesService: { findActiveById: jest.Mock };
-  let workerDocumentsService: { hasAllRequiredDocuments: jest.Mock };
+  let workerDocumentsService: {
+    hasAllRequiredDocuments: jest.Mock;
+    getMissingApprovedDocumentTypes: jest.Mock;
+  };
   let auditLogService: { record: jest.Mock };
   let usersService: { findById: jest.Mock; addRole: jest.Mock };
 
@@ -48,7 +51,10 @@ describe('WorkerProfilesService', () => {
       aggregate: jest.fn().mockResolvedValue([]),
     };
     countriesService = { findActiveById: jest.fn().mockResolvedValue({ code: 'SY' }) };
-    workerDocumentsService = { hasAllRequiredDocuments: jest.fn() };
+    workerDocumentsService = {
+      hasAllRequiredDocuments: jest.fn(),
+      getMissingApprovedDocumentTypes: jest.fn().mockResolvedValue([]),
+    };
     auditLogService = { record: jest.fn().mockResolvedValue(undefined) };
     usersService = { findById: jest.fn(), addRole: jest.fn() };
 
@@ -244,6 +250,7 @@ describe('WorkerProfilesService', () => {
         countryId: { toString: () => 'country-1' },
         verificationStatus: VerificationStatus.DRAFT,
         rejectionReason: { en: 'old reason' },
+        submittedAt: null,
         save: jest.fn().mockResolvedValue(undefined),
       };
     }
@@ -288,6 +295,7 @@ describe('WorkerProfilesService', () => {
 
       expect(profile.verificationStatus).toBe(VerificationStatus.PENDING_REVIEW);
       expect(profile.rejectionReason).toBeNull();
+      expect(profile.submittedAt).toBeInstanceOf(Date);
       expect(profile.save).toHaveBeenCalled();
     });
 
@@ -366,6 +374,9 @@ describe('WorkerProfilesService', () => {
   describe('reviewWorker', () => {
     function pendingProfile() {
       return {
+        id: 'profile-1',
+        _id: 'profile-1',
+        countryId: { toString: () => 'country-1' },
         verificationStatus: VerificationStatus.PENDING_REVIEW,
         rejectionReason: null,
         reviewedBy: null,
@@ -373,6 +384,50 @@ describe('WorkerProfilesService', () => {
         save: jest.fn().mockResolvedValue(undefined),
       };
     }
+
+    it('refuses to approve while required documents are not all approved, naming which ones', async () => {
+      const profile = pendingProfile();
+      profileModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(profile) });
+      workerDocumentsService.getMissingApprovedDocumentTypes.mockResolvedValue([
+        DocumentType.NATIONAL_ID_FRONT,
+        DocumentType.CRIMINAL_RECORD,
+      ]);
+
+      await expect(
+        service.reviewWorker('admin-1', 'profile-1', { action: 'approve' }),
+      ).rejects.toThrow(/NATIONAL_ID_FRONT, CRIMINAL_RECORD/);
+      expect(profile.save).not.toHaveBeenCalled();
+      expect(auditLogService.record).not.toHaveBeenCalled();
+    });
+
+    it('checks document completeness against the required types for her own country', async () => {
+      const profile = pendingProfile();
+      profileModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(profile) });
+
+      await service.reviewWorker('admin-1', 'profile-1', { action: 'approve' });
+
+      expect(countriesService.findActiveById).toHaveBeenCalledWith('country-1');
+      expect(workerDocumentsService.getMissingApprovedDocumentTypes).toHaveBeenCalledWith(
+        'profile-1',
+        [
+          DocumentType.NATIONAL_ID_FRONT,
+          DocumentType.NATIONAL_ID_BACK,
+          DocumentType.CRIMINAL_RECORD,
+        ],
+      );
+    });
+
+    it('never checks document completeness for reject/suspend, only approve', async () => {
+      const profile = { ...pendingProfile(), verificationStatus: VerificationStatus.APPROVED };
+      profileModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(profile) });
+
+      await service.reviewWorker('admin-1', 'profile-1', {
+        action: 'suspend',
+        reason: { en: 'complaint' },
+      });
+
+      expect(workerDocumentsService.getMissingApprovedDocumentTypes).not.toHaveBeenCalled();
+    });
 
     it('approves and records WORKER_APPROVED with correct from/to metadata', async () => {
       const profile = pendingProfile();
