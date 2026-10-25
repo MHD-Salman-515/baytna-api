@@ -144,4 +144,42 @@ export const envValidationSchema = Joi.object({
   SHARE_TRIP_GRACE_PERIOD_MINUTES: Joi.number().integer().positive().default(60),
   SHARE_TRIP_PURGE_SWEEP_ENABLED: Joi.boolean().truthy('true').falsy('false').default(true),
   SHARE_TRIP_PURGE_SWEEP_INTERVAL_SECONDS: Joi.number().integer().positive().default(300),
+}).custom((value: Record<string, string | undefined>, helpers) => {
+  // Production-only cross-field guards. Both checks exist because a
+  // misconfiguration here doesn't fail loudly on its own — a non-HTTPS
+  // presigned URL or a wildcard CORS origin "works" right up until it's
+  // actually exploited, so these are rejected at startup instead.
+  if (value.NODE_ENV !== 'production') {
+    return value;
+  }
+
+  // Presigned document URLs (national ID photos, criminal-record
+  // certificates) must never be issued over plain http. PUBLIC_BASE_URL is
+  // optional elsewhere (defaults to http://localhost:<PORT> for local dev,
+  // see configuration.ts) — that default must never silently apply in
+  // production, so it's required and HTTPS-only here instead.
+  if (!value.PUBLIC_BASE_URL || !value.PUBLIC_BASE_URL.startsWith('https://')) {
+    return helpers.message({
+      custom:
+        'PUBLIC_BASE_URL must be explicitly set to an https:// URL when NODE_ENV=production — presigned document URLs must never be issued over plain http.',
+    });
+  }
+  if (value.S3_ENDPOINT && !value.S3_ENDPOINT.startsWith('https://')) {
+    return helpers.message({
+      custom:
+        'S3_ENDPOINT must use https:// when NODE_ENV=production — same reasoning as PUBLIC_BASE_URL.',
+    });
+  }
+
+  // An allowlist that includes "*" anywhere reflects any origin (see
+  // app.enableCors in main.ts) — fine in development, never in production.
+  const corsOrigins = (value.CORS_ORIGINS ?? '*').split(',').map((origin) => origin.trim());
+  if (corsOrigins.includes('*')) {
+    return helpers.message({
+      custom:
+        'CORS_ORIGINS must be an explicit comma-separated allowlist when NODE_ENV=production — "*" is not permitted.',
+    });
+  }
+
+  return value;
 });
