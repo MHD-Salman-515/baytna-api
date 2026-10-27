@@ -13,11 +13,14 @@ const ALLOWED_KEYS = [
 ].sort();
 
 const ALLOWED_OFFERING_KEYS = [
+  'workerServiceId',
   'serviceId',
   'serviceName',
   'pricingType',
   'displayPrice',
   'currency',
+  'minHours',
+  'bySizeTiers',
 ].sort();
 
 // A deliberately over-stuffed "kitchen sink" input — every sensitive field a
@@ -59,11 +62,14 @@ function kitchenSinkUser() {
 // never reach a customer (commissionRate, earnings-shaped data).
 function kitchenSinkOffering() {
   return {
+    workerServiceId: 'worker-service-1',
     serviceId: 'service-1',
     serviceName: { ar: 'تنظيف', en: 'Cleaning' },
     pricingType: PricingType.FIXED,
     displayPrice: 7000,
     currency: 'SYP',
+    minHours: null,
+    bySizeTiers: null,
     // sensitive / internal — must never appear in the output
     commissionRate: 1500,
     workerEarnings: 5950,
@@ -161,12 +167,50 @@ describe('toPublicWorkerProfile', () => {
         kitchenSinkOffering(),
       ]);
       expect(result.services[0]).toEqual({
+        workerServiceId: 'worker-service-1',
         serviceId: 'service-1',
         serviceName: { ar: 'تنظيف', en: 'Cleaning' },
         pricingType: PricingType.FIXED,
         displayPrice: 7000,
         currency: 'SYP',
+        minHours: null,
+        bySizeTiers: null,
       });
+    });
+
+    it('includes workerServiceId — required by POST /bookings and GET /pricing/quote', () => {
+      const result = toPublicWorkerProfile(kitchenSinkWorker(), null, null, [
+        kitchenSinkOffering(),
+      ]);
+      expect(result.services[0].workerServiceId).toBe('worker-service-1');
+    });
+
+    it('passes through minHours for an HOURLY offering', () => {
+      const offering = {
+        ...kitchenSinkOffering(),
+        pricingType: PricingType.HOURLY,
+        minHours: 3,
+      };
+      const result = toPublicWorkerProfile(kitchenSinkWorker(), null, null, [offering]);
+      expect(result.services[0].minHours).toBe(3);
+      expect(result.services[0].bySizeTiers).toBeNull();
+    });
+
+    it('passes through bySizeTiers for a BY_SIZE offering', () => {
+      const offering = {
+        ...kitchenSinkOffering(),
+        pricingType: PricingType.BY_SIZE,
+        bySizeTiers: [
+          { maxRooms: 2, price: 5000 },
+          { maxRooms: 4, price: 8000 },
+        ],
+      };
+      const result = toPublicWorkerProfile(kitchenSinkWorker(), null, null, [offering]);
+      expect(result.services[0].bySizeTiers).toEqual([
+        { maxRooms: 2, price: 5000 },
+        { maxRooms: 4, price: 8000 },
+      ]);
+      expect(result.services[0].minHours).toBeNull();
     });
   });
 });

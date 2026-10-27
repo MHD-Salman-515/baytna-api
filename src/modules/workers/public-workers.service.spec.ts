@@ -174,6 +174,7 @@ describe('PublicWorkersService', () => {
       workerServiceModel.find.mockReturnValue({
         exec: jest.fn().mockResolvedValue([
           {
+            id: 'ws-1',
             serviceId: { toString: () => 'service-1' },
             pricingType: PricingType.FIXED,
             fixed: { price: 5000 },
@@ -186,13 +187,64 @@ describe('PublicWorkersService', () => {
 
       expect(result.data[0].services).toEqual([
         {
+          workerServiceId: 'ws-1',
           serviceId: 'service-1',
           serviceName: { ar: 'تنظيف', en: 'Cleaning' },
           pricingType: PricingType.FIXED,
           displayPrice: 5000,
           currency: 'SYP',
+          minHours: null,
+          bySizeTiers: null,
         },
       ]);
+    });
+
+    it('includes minHours for an HOURLY offering and bySizeTiers for a BY_SIZE offering', async () => {
+      servicesService.findActive.mockResolvedValue([
+        { id: 'service-1', name: { ar: 'تنظيف', en: 'Cleaning' } },
+      ]);
+      profileModel.find.mockReturnValue(
+        chainable([{ id: 'w1', cityId: null, serviceAreas: [], bio: {}, rating: 5, userId: null }]),
+      );
+      profileModel.countDocuments.mockReturnValue({ exec: jest.fn().mockResolvedValue(1) });
+      workerServiceModel.find.mockReturnValue({
+        exec: jest.fn().mockResolvedValue([
+          {
+            id: 'ws-1',
+            serviceId: { toString: () => 'service-1' },
+            pricingType: PricingType.HOURLY,
+            hourly: { rate: 2000, minHours: 3 },
+            currency: 'SYP',
+          },
+          {
+            id: 'ws-2',
+            serviceId: { toString: () => 'service-1' },
+            pricingType: PricingType.BY_SIZE,
+            bySize: {
+              tiers: [
+                { maxRooms: 2, price: 5000 },
+                { maxRooms: 4, price: 8000 },
+              ],
+            },
+            currency: 'SYP',
+          },
+        ]),
+      });
+
+      const result = await service.findMany({ page: 1, limit: 20, skip: 0 } as never);
+
+      expect(result.data[0].services[0]).toEqual(
+        expect.objectContaining({ minHours: 3, bySizeTiers: null }),
+      );
+      expect(result.data[0].services[1]).toEqual(
+        expect.objectContaining({
+          minHours: null,
+          bySizeTiers: [
+            { maxRooms: 2, price: 5000 },
+            { maxRooms: 4, price: 8000 },
+          ],
+        }),
+      );
     });
   });
 

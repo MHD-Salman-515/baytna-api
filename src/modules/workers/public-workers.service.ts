@@ -137,11 +137,16 @@ export class PublicWorkersService {
       .find({ workerProfileId: profile.id, isActive: true, isDeleted: false })
       .exec();
     const services: PublicWorkerServiceOffering[] = offerings.map((offering) => ({
+      workerServiceId: offering.id as string,
       serviceId: offering.serviceId.toString(),
       serviceName: serviceNameById.get(offering.serviceId.toString()) ?? { ar: '', en: '' },
       pricingType: offering.pricingType,
       displayPrice: getDisplayPrice(offering),
       currency: offering.currency,
+      minHours: offering.hourly?.minHours ?? null,
+      bySizeTiers: offering.bySize
+        ? offering.bySize.tiers.map((tier) => ({ maxRooms: tier.maxRooms, price: tier.price }))
+        : null,
     }));
 
     // Named fields only, matching PublicProjectionWorkerInput exactly — no

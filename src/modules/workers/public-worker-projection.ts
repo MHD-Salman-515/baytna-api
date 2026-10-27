@@ -1,6 +1,11 @@
 import { PricingType } from '../../common/enums/pricing-type.enum';
 
 export interface PublicWorkerServiceOffering {
+  // The specific (workerProfileId, serviceId) offering — required by both
+  // POST /bookings (SCHEDULED) and GET /pricing/quote. Identifies an
+  // offering, not a person — not sensitive the way commissionRate or
+  // workerEarnings are.
+  workerServiceId: string;
   serviceId: string;
   serviceName: { ar: string; en: string };
   pricingType: PricingType;
@@ -9,6 +14,12 @@ export interface PublicWorkerServiceOffering {
   // anything else internal to pricing.
   displayPrice: number;
   currency: string;
+  // Only meaningful for HOURLY — null otherwise. Lets a client show/enforce
+  // the minimum without round-tripping GET /pricing/quote first.
+  minHours: number | null;
+  // Only meaningful for BY_SIZE — null otherwise. Ascending by maxRooms,
+  // same order WorkerServicesService validates at write time.
+  bySizeTiers: Array<{ maxRooms: number; price: number }> | null;
 }
 
 export interface PublicWorkerProfile {
@@ -67,11 +78,14 @@ export function toPublicWorkerProfile(
     cityId: worker.cityId === null ? null : worker.cityId.toString(),
     serviceAreas: worker.serviceAreas.map((city) => city.toString()),
     services: services.map((offering) => ({
+      workerServiceId: offering.workerServiceId,
       serviceId: offering.serviceId,
       serviceName: { ar: offering.serviceName.ar, en: offering.serviceName.en },
       pricingType: offering.pricingType,
       displayPrice: offering.displayPrice,
       currency: offering.currency,
+      minHours: offering.minHours,
+      bySizeTiers: offering.bySizeTiers,
     })),
   };
 }
