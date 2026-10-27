@@ -2,6 +2,7 @@ import { Controller, Get, Param, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { Role } from '../../common/enums/role.enum';
+import { ParseObjectIdPipe } from '../../common/pipes/parse-object-id.pipe';
 import { BookingsService } from './bookings.service';
 import { GetSlotsQueryDto } from './dto/get-slots-query.dto';
 
@@ -19,7 +20,10 @@ export class WorkerSlotsController {
   constructor(private readonly bookingsService: BookingsService) {}
 
   @Get(':id/slots')
-  getFreeSlots(@Param('id') workerProfileId: string, @Query() query: GetSlotsQueryDto) {
+  getFreeSlots(
+    @Param('id', ParseObjectIdPipe) workerProfileId: string,
+    @Query() query: GetSlotsQueryDto,
+  ) {
     return this.bookingsService.getFreeSlots(workerProfileId, query.date);
   }
 }

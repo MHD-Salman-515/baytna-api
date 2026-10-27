@@ -18,6 +18,7 @@ import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { Role } from '../../common/enums/role.enum';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
+import { ParseObjectIdPipe } from '../../common/pipes/parse-object-id.pipe';
 import { MAX_FILE_SIZE_BYTES } from '../storage/storage.constants';
 import { CreateReportDto } from './dto/create-report.dto';
 import { ReportsService } from './reports.service';
@@ -41,7 +42,7 @@ export class ReportsController {
   }
 
   @Get(':id')
-  getOwn(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+  getOwn(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseObjectIdPipe) id: string) {
     return this.reportsService.getOwn(user.userId, id);
   }
 
@@ -55,7 +56,7 @@ export class ReportsController {
   )
   async uploadAttachment(
     @CurrentUser() user: AuthenticatedUser,
-    @Param('id') id: string,
+    @Param('id', ParseObjectIdPipe) id: string,
     @UploadedFile() file?: Express.Multer.File,
   ) {
     if (!file) {
@@ -70,7 +71,7 @@ export class ReportsController {
   @Get(':id/attachments/:index/url')
   getAttachmentUrl(
     @CurrentUser() user: AuthenticatedUser,
-    @Param('id') id: string,
+    @Param('id', ParseObjectIdPipe) id: string,
     @Param('index', ParseIntPipe) index: number,
   ) {
     return this.reportsService.getAttachmentDownloadUrlOwn(user.userId, id, index);

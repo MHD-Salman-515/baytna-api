@@ -15,6 +15,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { Role } from '../../common/enums/role.enum';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
+import { ParseObjectIdPipe } from '../../common/pipes/parse-object-id.pipe';
 import { ApprovedWorkerGuard } from './approved-worker.guard';
 import { CreateWorkerServiceDto } from './dto/create-worker-service.dto';
 import { UpdateWorkerServiceDto } from './dto/update-worker-service.dto';
@@ -56,7 +57,7 @@ export class WorkerServicesController {
   @Patch(':id')
   async update(
     @CurrentUser() user: AuthenticatedUser,
-    @Param('id') id: string,
+    @Param('id', ParseObjectIdPipe) id: string,
     @Body() dto: UpdateWorkerServiceDto,
   ) {
     const profile = await this.workerProfilesService.getOwn(user.userId);
@@ -70,7 +71,7 @@ export class WorkerServicesController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  async delete(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+  async delete(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseObjectIdPipe) id: string) {
     const profile = await this.workerProfilesService.getOwn(user.userId);
     await this.workerServicesService.delete(profile.id as string, id);
   }

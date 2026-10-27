@@ -4,6 +4,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { Role } from '../../common/enums/role.enum';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
+import { ParseObjectIdPipe } from '../../common/pipes/parse-object-id.pipe';
 import { QueryAdminPanicAlertsDto } from './dto/query-admin-panic-alerts.dto';
 import { ResolvePanicDto } from './dto/resolve-panic.dto';
 import { PanicAlertsService } from './panic-alerts.service';
@@ -21,14 +22,14 @@ export class AdminPanicAlertsController {
   }
 
   @Get(':id')
-  getOne(@Param('id') id: string) {
+  getOne(@Param('id', ParseObjectIdPipe) id: string) {
     return this.panicAlertsService.getForAdmin(id);
   }
 
   @Post(':id/resolve')
   resolve(
     @CurrentUser() admin: AuthenticatedUser,
-    @Param('id') id: string,
+    @Param('id', ParseObjectIdPipe) id: string,
     @Body() dto: ResolvePanicDto,
   ) {
     return this.panicAlertsService.resolve(admin.userId, id, dto);

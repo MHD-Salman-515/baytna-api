@@ -4,6 +4,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { Role } from '../../common/enums/role.enum';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
+import { ParseObjectIdPipe } from '../../common/pipes/parse-object-id.pipe';
 import { AddReportNoteDto } from './dto/add-report-note.dto';
 import { AssignReportDto } from './dto/assign-report.dto';
 import { ChangeReportStatusDto } from './dto/change-report-status.dto';
@@ -24,14 +25,14 @@ export class AdminReportsController {
   }
 
   @Get(':id')
-  getOne(@Param('id') id: string) {
+  getOne(@Param('id', ParseObjectIdPipe) id: string) {
     return this.reportsService.getForAdmin(id);
   }
 
   @Get(':id/attachments/:index/url')
   getAttachmentUrl(
     @CurrentUser() admin: AuthenticatedUser,
-    @Param('id') id: string,
+    @Param('id', ParseObjectIdPipe) id: string,
     @Param('index', ParseIntPipe) index: number,
   ) {
     return this.reportsService.getAttachmentDownloadUrlForAdmin(admin.userId, id, index);
@@ -40,7 +41,7 @@ export class AdminReportsController {
   @Post(':id/assign')
   assign(
     @CurrentUser() admin: AuthenticatedUser,
-    @Param('id') id: string,
+    @Param('id', ParseObjectIdPipe) id: string,
     @Body() dto: AssignReportDto,
   ) {
     return this.reportsService.assign(admin.userId, id, dto);
@@ -49,7 +50,7 @@ export class AdminReportsController {
   @Post(':id/status')
   changeStatus(
     @CurrentUser() admin: AuthenticatedUser,
-    @Param('id') id: string,
+    @Param('id', ParseObjectIdPipe) id: string,
     @Body() dto: ChangeReportStatusDto,
   ) {
     return this.reportsService.changeStatus(admin.userId, id, dto);
@@ -58,7 +59,7 @@ export class AdminReportsController {
   @Post(':id/notes')
   addNote(
     @CurrentUser() admin: AuthenticatedUser,
-    @Param('id') id: string,
+    @Param('id', ParseObjectIdPipe) id: string,
     @Body() dto: AddReportNoteDto,
   ) {
     return this.reportsService.addInternalNote(admin.userId, id, dto);
@@ -67,7 +68,7 @@ export class AdminReportsController {
   @Post(':id/resolve')
   resolve(
     @CurrentUser() admin: AuthenticatedUser,
-    @Param('id') id: string,
+    @Param('id', ParseObjectIdPipe) id: string,
     @Body() dto: ResolveReportDto,
   ) {
     return this.reportsService.resolve(admin.userId, id, dto);

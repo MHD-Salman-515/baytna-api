@@ -2,6 +2,7 @@ import { Controller, Get, Param, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { Role } from '../../common/enums/role.enum';
+import { ParseObjectIdPipe } from '../../common/pipes/parse-object-id.pipe';
 import { FindPublicWorkersQueryDto } from './dto/find-public-workers-query.dto';
 import { PublicWorkersService } from './public-workers.service';
 
@@ -18,7 +19,7 @@ export class PublicWorkersController {
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string) {
+  findOne(@Param('id', ParseObjectIdPipe) id: string) {
     return this.publicWorkersService.findOne(id);
   }
 }

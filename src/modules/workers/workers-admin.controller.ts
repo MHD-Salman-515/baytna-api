@@ -4,6 +4,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { Role } from '../../common/enums/role.enum';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
+import { ParseObjectIdPipe } from '../../common/pipes/parse-object-id.pipe';
 import { AdminFindWorkersQueryDto } from './dto/admin-find-workers-query.dto';
 import { ReviewDocumentDto } from './dto/review-document.dto';
 import { ReviewWorkerDto } from './dto/review-worker.dto';
@@ -28,7 +29,7 @@ export class WorkersAdminController {
   }
 
   @Get(':id')
-  async getOne(@Param('id') id: string) {
+  async getOne(@Param('id', ParseObjectIdPipe) id: string) {
     const [profile, documents] = await Promise.all([
       this.workerProfilesService.getForAdminWithUser(id),
       this.workerDocumentsService.listForAdmin(id),
@@ -39,8 +40,8 @@ export class WorkersAdminController {
   @Get(':id/documents/:docId/url')
   getDocumentUrl(
     @CurrentUser() admin: AuthenticatedUser,
-    @Param('id') workerProfileId: string,
-    @Param('docId') docId: string,
+    @Param('id', ParseObjectIdPipe) workerProfileId: string,
+    @Param('docId', ParseObjectIdPipe) docId: string,
     @Ip() ip: string,
     @Headers('user-agent') userAgent: string | undefined,
   ) {
@@ -58,8 +59,8 @@ export class WorkersAdminController {
   @Post(':id/documents/:docId/review')
   reviewDocument(
     @CurrentUser() admin: AuthenticatedUser,
-    @Param('id') workerProfileId: string,
-    @Param('docId') docId: string,
+    @Param('id', ParseObjectIdPipe) workerProfileId: string,
+    @Param('docId', ParseObjectIdPipe) docId: string,
     @Body() dto: ReviewDocumentDto,
   ) {
     return this.workerDocumentsService.reviewDocument(
@@ -74,7 +75,7 @@ export class WorkersAdminController {
   @Post(':id/review')
   reviewWorker(
     @CurrentUser() admin: AuthenticatedUser,
-    @Param('id') workerProfileId: string,
+    @Param('id', ParseObjectIdPipe) workerProfileId: string,
     @Body() dto: ReviewWorkerDto,
   ) {
     return this.workerProfilesService.reviewWorker(admin.userId, workerProfileId, dto);
@@ -82,7 +83,7 @@ export class WorkersAdminController {
 
   // Read-only, for support and dispute handling — admins never create or edit a worker's pricing.
   @Get(':id/services')
-  listServices(@Param('id') workerProfileId: string) {
+  listServices(@Param('id', ParseObjectIdPipe) workerProfileId: string) {
     return this.workerServicesService.listForAdmin(workerProfileId);
   }
 }

@@ -5,6 +5,7 @@ import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { Role } from '../../common/enums/role.enum';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
+import { ParseObjectIdPipe } from '../../common/pipes/parse-object-id.pipe';
 import { ReasonDto } from '../bookings/dto/reason.dto';
 import { AdjustWalletDto } from './dto/adjust-wallet.dto';
 import { QueryAdminWalletsDto } from './dto/query-admin-wallets.dto';
@@ -32,13 +33,13 @@ export class AdminWalletsController {
   }
 
   @Get(':workerProfileId')
-  getOne(@Param('workerProfileId') workerProfileId: string) {
+  getOne(@Param('workerProfileId', ParseObjectIdPipe) workerProfileId: string) {
     return this.walletsService.getForAdmin(workerProfileId);
   }
 
   @Get(':workerProfileId/entries')
   listEntries(
-    @Param('workerProfileId') workerProfileId: string,
+    @Param('workerProfileId', ParseObjectIdPipe) workerProfileId: string,
     @Query() query: PaginationQueryDto,
   ) {
     return this.walletsService.listEntries(workerProfileId, query);
@@ -47,7 +48,7 @@ export class AdminWalletsController {
   @Post(':workerProfileId/topup')
   topup(
     @CurrentUser() admin: AuthenticatedUser,
-    @Param('workerProfileId') workerProfileId: string,
+    @Param('workerProfileId', ParseObjectIdPipe) workerProfileId: string,
     @Body() dto: TopupWalletDto,
   ) {
     return this.walletsService.topup(admin.userId, workerProfileId, dto);
@@ -56,7 +57,7 @@ export class AdminWalletsController {
   @Post(':workerProfileId/adjust')
   adjust(
     @CurrentUser() admin: AuthenticatedUser,
-    @Param('workerProfileId') workerProfileId: string,
+    @Param('workerProfileId', ParseObjectIdPipe) workerProfileId: string,
     @Body() dto: AdjustWalletDto,
   ) {
     return this.walletsService.adjust(admin.userId, workerProfileId, dto);
@@ -65,7 +66,7 @@ export class AdminWalletsController {
   @Post(':workerProfileId/reverse')
   reverse(
     @CurrentUser() admin: AuthenticatedUser,
-    @Param('workerProfileId') workerProfileId: string,
+    @Param('workerProfileId', ParseObjectIdPipe) workerProfileId: string,
     @Body() dto: ReverseWalletEntryDto,
   ) {
     return this.walletsService.reverse(admin.userId, workerProfileId, dto);
@@ -74,7 +75,7 @@ export class AdminWalletsController {
   @Post(':workerProfileId/reinstate')
   reinstate(
     @CurrentUser() admin: AuthenticatedUser,
-    @Param('workerProfileId') workerProfileId: string,
+    @Param('workerProfileId', ParseObjectIdPipe) workerProfileId: string,
     @Body() dto: ReasonDto,
   ) {
     return this.walletsService.reinstateManually(admin.userId, workerProfileId, dto.reason);

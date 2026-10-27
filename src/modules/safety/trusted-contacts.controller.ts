@@ -2,6 +2,7 @@ import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post } from
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
+import { ParseObjectIdPipe } from '../../common/pipes/parse-object-id.pipe';
 import { CreateTrustedContactDto } from './dto/create-trusted-contact.dto';
 import { TrustedContactsService } from './trusted-contacts.service';
 
@@ -24,7 +25,10 @@ export class TrustedContactsController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  async removeOwn(@CurrentUser() user: AuthenticatedUser, @Param('id') contactId: string) {
+  async removeOwn(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseObjectIdPipe) contactId: string,
+  ) {
     await this.trustedContactsService.removeOwn(user.userId, contactId);
   }
 }

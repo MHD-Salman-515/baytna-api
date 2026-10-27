@@ -2,6 +2,7 @@ import { Controller, Get, Param, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { Role } from '../../common/enums/role.enum';
+import { ParseObjectIdPipe } from '../../common/pipes/parse-object-id.pipe';
 import { AdminConsoleService } from './admin-console.service';
 import { AdminMetricsQueryDto } from './dto/admin-metrics-query.dto';
 import { AdminSearchQueryDto } from './dto/admin-search-query.dto';
@@ -24,7 +25,7 @@ export class AdminConsoleController {
   }
 
   @Get('workers/:id/360')
-  getWorker360(@Param('id') workerProfileId: string) {
+  getWorker360(@Param('id', ParseObjectIdPipe) workerProfileId: string) {
     return this.adminConsoleService.getWorker360(workerProfileId);
   }
 

@@ -4,6 +4,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { Role } from '../../common/enums/role.enum';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
+import { ParseObjectIdPipe } from '../../common/pipes/parse-object-id.pipe';
 import { HideReviewDto } from './dto/hide-review.dto';
 import { QueryAdminReviewsDto } from './dto/query-admin-reviews.dto';
 import { ReviewsService } from './reviews.service';
@@ -23,7 +24,7 @@ export class AdminReviewsController {
   @Post(':id/hide')
   hide(
     @CurrentUser() admin: AuthenticatedUser,
-    @Param('id') reviewId: string,
+    @Param('id', ParseObjectIdPipe) reviewId: string,
     @Body() dto: HideReviewDto,
   ) {
     return this.reviewsService.hide(admin.userId, reviewId, dto);

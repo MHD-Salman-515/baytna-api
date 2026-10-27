@@ -18,6 +18,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { Role } from '../../common/enums/role.enum';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
+import { ParseObjectIdPipe } from '../../common/pipes/parse-object-id.pipe';
 import { MAX_FILE_SIZE_BYTES } from '../storage/storage.constants';
 import { ApprovedWorkerGuard } from './approved-worker.guard';
 import { SetAvailabilityDto } from './dto/set-availability.dto';
@@ -98,7 +99,10 @@ export class WorkerMeController {
 
   @Roles(Role.WORKER)
   @Delete('documents/:id')
-  async deleteDocument(@CurrentUser() user: AuthenticatedUser, @Param('id') documentId: string) {
+  async deleteDocument(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseObjectIdPipe) documentId: string,
+  ) {
     const profile = await this.workerProfilesService.getOwn(user.userId);
     await this.workerDocumentsService.deleteOwn(profile.id as string, documentId);
   }
