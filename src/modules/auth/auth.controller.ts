@@ -10,6 +10,7 @@ import { LogoutDto } from './dto/logout.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { RequestOtpDto } from './dto/request-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
+import { OTP_IP_THROTTLE_LIMIT, OTP_IP_THROTTLE_TTL_MS } from './otp/otp.constants';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -23,7 +24,10 @@ export class AuthController {
   // Stricter, IP-scoped limit on top of the global throttler — the 'otp'
   // throttler is registered with a generous default in app.module.ts so it's
   // a no-op everywhere else; this override is what actually bites.
-  @Throttle({ otp: { limit: 10, ttl: 60 * 60 * 1000 } })
+  // Configurable via OTP_IP_THROTTLE_LIMIT/OTP_IP_THROTTLE_TTL_MS — see
+  // otp.constants.ts for why a decorator reads process.env directly instead
+  // of going through ConfigService.
+  @Throttle({ otp: { limit: OTP_IP_THROTTLE_LIMIT, ttl: OTP_IP_THROTTLE_TTL_MS } })
   @Post('otp/request')
   @HttpCode(HttpStatus.OK)
   async requestOtp(@Body() dto: RequestOtpDto): Promise<{ message: string }> {

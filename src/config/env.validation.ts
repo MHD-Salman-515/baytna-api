@@ -34,6 +34,18 @@ export const envValidationSchema = Joi.object({
   // valid codes — the attacker would also need this value.
   OTP_PEPPER: Joi.string().min(32).required(),
 
+  // Per-IP throttle on POST /auth/otp/request (AuthController's @Throttle
+  // override) — NOT the per-phone limits in otp.constants.ts, which stay
+  // fixed. Defaults match the tight production-appropriate values
+  // (10 requests / hour / IP). Loosen for staging/automated testing, e.g.
+  // OTP_IP_THROTTLE_LIMIT=100, OTP_IP_THROTTLE_TTL_MS=60000 (100 req/min/IP)
+  // — generous enough for a test suite's bursts without being unbounded.
+  OTP_IP_THROTTLE_LIMIT: Joi.number().integer().positive().default(10),
+  OTP_IP_THROTTLE_TTL_MS: Joi.number()
+    .integer()
+    .positive()
+    .default(60 * 60 * 1000),
+
   // Optional. Gates GET /dev/last-otp (StoredOtpSender/DevOtpController —
   // see README "Dev OTP retrieval"). Never required in production; that
   // route refuses to even construct when NODE_ENV === 'production'

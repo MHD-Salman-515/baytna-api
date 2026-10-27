@@ -98,3 +98,26 @@ describe('envValidationSchema — production HTTPS/CORS guards', () => {
     expect(error).toBeUndefined();
   });
 });
+
+describe('envValidationSchema — OTP_IP_THROTTLE_* ', () => {
+  it('defaults OTP_IP_THROTTLE_LIMIT/TTL_MS when unset', () => {
+    const { error, value } = validate(baseEnv());
+    expect(error).toBeUndefined();
+    expect(value.OTP_IP_THROTTLE_LIMIT).toBe(10);
+    expect(value.OTP_IP_THROTTLE_TTL_MS).toBe(60 * 60 * 1000);
+  });
+
+  it('accepts a looser staging override', () => {
+    const { error, value } = validate(
+      baseEnv({ OTP_IP_THROTTLE_LIMIT: '100', OTP_IP_THROTTLE_TTL_MS: '60000' }),
+    );
+    expect(error).toBeUndefined();
+    expect(value.OTP_IP_THROTTLE_LIMIT).toBe(100);
+    expect(value.OTP_IP_THROTTLE_TTL_MS).toBe(60000);
+  });
+
+  it('rejects a non-positive value', () => {
+    const { error } = validate(baseEnv({ OTP_IP_THROTTLE_LIMIT: '0' }));
+    expect(error?.message).toMatch(/OTP_IP_THROTTLE_LIMIT/);
+  });
+});
