@@ -438,6 +438,78 @@ describe('BookingsService', () => {
     });
   });
 
+  describe('getFreeSlots', () => {
+    it('throws NotFoundException when the worker is not approved/available', async () => {
+      workerProfilesService.findApprovedById.mockResolvedValue(null);
+      await expect(service.getFreeSlots(workerProfileId, '2026-12-01')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('rejects a date beyond the booking horizon, without even computing windows', async () => {
+      const farFuture = new Date(Date.now() + 200 * 24 * 60 * 60 * 1000);
+      const isoDate = farFuture.toISOString().slice(0, 10);
+
+      await expect(service.getFreeSlots(workerProfileId, isoDate)).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(workerAvailabilityService.getWindowsForDate).not.toHaveBeenCalled();
+    });
+
+    it('returns [] when she has no availability windows that day', async () => {
+      workerAvailabilityService.getWindowsForDate.mockResolvedValue([]);
+      bookingModel.find.mockReturnValue(chainable([]));
+      await expect(service.getFreeSlots(workerProfileId, '2026-12-01')).resolves.toEqual([]);
+    });
+
+    it('keeps a window entirely in the future untouched', async () => {
+      bookingModel.find.mockReturnValue(chainable([]));
+      const result = await service.getFreeSlots(workerProfileId, '2026-12-01');
+      expect(result).toEqual([
+        { start: new Date('2026-12-01T06:00:00.000Z'), end: new Date('2026-12-01T14:00:00.000Z') },
+      ]);
+    });
+
+    it('drops a window that has already fully elapsed', async () => {
+      const start = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      const end = new Date(Date.now() - 60 * 60 * 1000);
+      workerAvailabilityService.getWindowsForDate.mockResolvedValue([{ start, end }]);
+      bookingModel.find.mockReturnValue(chainable([]));
+
+      const isoDate = new Date().toISOString().slice(0, 10);
+      await expect(service.getFreeSlots(workerProfileId, isoDate)).resolves.toEqual([]);
+    });
+
+    it('clips a window straddling right now, keeping only its future portion', async () => {
+      const start = new Date(Date.now() - 60 * 60 * 1000);
+      const end = new Date(Date.now() + 60 * 60 * 1000);
+      workerAvailabilityService.getWindowsForDate.mockResolvedValue([{ start, end }]);
+      bookingModel.find.mockReturnValue(chainable([]));
+
+      const isoDate = new Date().toISOString().slice(0, 10);
+      const result = await service.getFreeSlots(workerProfileId, isoDate);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].end).toEqual(end);
+      expect(result[0].start.getTime()).toBeGreaterThan(start.getTime());
+    });
+
+    it('still subtracts an existing booking (plus buffer) from an otherwise-future window', async () => {
+      bookingModel.find.mockReturnValue(
+        chainable([
+          { scheduledFor: new Date('2026-12-01T10:00:00.000Z'), estimatedDurationMinutes: 120 },
+        ]),
+      );
+      const result = await service.getFreeSlots(workerProfileId, '2026-12-01');
+      // Existing booking 10:00-12:00 + 30min buffer each side -> busy 09:30-12:30,
+      // out of the 06:00-14:00 window.
+      expect(result).toEqual([
+        { start: new Date('2026-12-01T06:00:00.000Z'), end: new Date('2026-12-01T09:30:00.000Z') },
+        { start: new Date('2026-12-01T12:30:00.000Z'), end: new Date('2026-12-01T14:00:00.000Z') },
+      ]);
+    });
+  });
+
   describe('ownership scoping', () => {
     it('getOwnForWorker throws NotFound when the booking belongs to someone else', async () => {
       bookingModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(null) });

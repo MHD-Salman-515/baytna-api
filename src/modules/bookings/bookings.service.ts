@@ -1061,7 +1061,10 @@ export class BookingsService {
    * existing non-terminal bookings — each expanded by the inter-booking
    * buffer — subtracted out. Same visibility gate as booking creation: a
    * customer must never be able to see slots for a worker she couldn't
-   * otherwise book.
+   * otherwise book. Two more things createScheduled() already enforces are
+   * mirrored here so the client is never offered a slot the server will
+   * then refuse: the date may not be more than bookingHorizonDays out, and
+   * any portion of today that's already elapsed is filtered, not offered.
    */
   async getFreeSlots(workerProfileId: string, isoDate: string): Promise<TimeInterval[]> {
     const profile = await this.workerProfilesService.findApprovedById(workerProfileId);
@@ -1070,6 +1073,16 @@ export class BookingsService {
     }
 
     const country = await this.countriesService.findActiveById(profile.countryId.toString());
+
+    const now = new Date();
+    const horizonMs = country.bookingPolicy.bookingHorizonDays * 24 * 60 * 60 * 1000;
+    const requestedDayStart = DateTime.fromISO(isoDate, { zone: country.timezone }).startOf('day');
+    if (requestedDayStart.toMillis() - now.getTime() > horizonMs) {
+      throw new BadRequestException(
+        `date may not be more than ${country.bookingPolicy.bookingHorizonDays} days in the future`,
+      );
+    }
+
     const windows = await this.workerAvailabilityService.getWindowsForDate(
       workerProfileId,
       isoDate,
@@ -1097,6 +1110,12 @@ export class BookingsService {
       start: new Date(b.scheduledFor!.getTime() - bufferMs),
       end: new Date(b.scheduledFor!.getTime() + b.estimatedDurationMinutes * 60_000 + bufferMs),
     }));
+
+    // Everything up to right now is "busy" too — the same interval
+    // arithmetic that clips a window around an existing booking naturally
+    // clips (or entirely removes) a window that has already started,
+    // without a separate code path.
+    busy.push({ start: new Date(0), end: now });
 
     return subtractBusyIntervals(windows, busy);
   }
